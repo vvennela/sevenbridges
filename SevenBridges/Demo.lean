@@ -116,4 +116,12 @@ def emptyBus : Solution :=
   { emptyLayout oldHarbor with routesOn := [false, true], bridges := [false, false, true] }
 #guard !decide (Valid oldHarbor emptyBus)
 
+/-! ## Cars stay off the river -/
+
+-- Even with every route off (so commuters drive), no car is reported on a river segment.
+#guard ((report oldHarbor sampleLayout).streets.all fun st =>
+  (oldHarbor.map.segments.getD st.segment default).terrain != .stream)
+#guard ((report oldHarbor { sampleLayout with routesOn := [false, false] }).streets.all fun st =>
+  (oldHarbor.map.segments.getD st.segment default).terrain != .stream)
+
 end SevenBridges.Demo

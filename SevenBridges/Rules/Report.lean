@@ -290,10 +290,12 @@ def evaluateWith (c : Context) (s : Solution) : Report :=
     blocks := c.blocks.map (blockReport c s d)
     cats := catReports c s d
     carTrips := (d.filter fun cd => cd.mode == .car).length
+    -- Cars around each driver's home block, on land streets only (never on the river).
     streets := (List.range p.map.segments.length).filterMap fun k =>
-      let side := (p.map.segments.getD k default).side
+      let seg := p.map.segments.getD k default
+      if seg.terrain == .stream then none else
       let cars := (d.filter fun cd => cd.mode == .car
-        && (p.map.block cd.who.home).sides.contains side).length
+        && (p.map.block cd.who.home).sides.contains seg.side).length
       if cars = 0 then none else some ⟨k, cars⟩
     score := scoreWith c s }
 
