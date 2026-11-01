@@ -388,7 +388,8 @@ best plan of every level it returns.
 3. **Budget**: the cost of a random layout plus 60–160.
 4. **Proof**: run `solve` with at most `attemptFuel` steps.
 5. **Keep** the level if the best plan has homes and beats the empty town,
-   and **random play does badly**: of up to 500 random layouts that fit the
+   its happiness and its productivity (with sales) are each at least a
+   tenth of its score, and **random play does badly**: of up to 500 random layouts that fit the
    budget (random choices, cut to the budget, transit dropped if it breaks a
    rule), the median rates at most 50 and 95% rate at most 85.
 6. Otherwise try another random level on the same map, until
@@ -399,9 +400,9 @@ best plan of every level it returns.
 
 | Size | Blocks | Homes | Offices | Food, shop, bar, park | Shops | Metro blocks | Bridge sites |
 |---|---|---|---|---|---|---|---|
-| easy | 5 | 1–3 floors | 3 random heights of 1–5 | all 4 | 1–2 floors | 2 | up to 2 |
-| medium | 7 | 1–3 | 1 random height | 3 of 4 | 1–2 | 2 | 1 |
-| hard | 8 | 1–2 | 1 random height | 2 of 4 | 1 | 2 | 1 |
+| easy | 5 | 1–3 floors | 1 or 2 floors, plus 2 other heights of 1–5 | all 4 | 1–2 floors | 2 | up to 2 |
+| medium | 7 | 1–3 | 1 or 2 floors | 3 of 4 | 1–2 | 2 | 1 |
+| hard | 8 | 1–2 | 1 or 2 floors | 2 of 4 | 1 | 2 | 1 |
 
 Hard levels are 8 blocks, not 9: with 9 open blocks the proof took 2–10
 million steps (10–40 s).
@@ -416,19 +417,20 @@ measured.
 |---|---|
 | `solveWithFuel_steps_le` | the fast solver takes at most `fuel` steps (`searchFuel` = 12,000,000 for `solve`) |
 | `solveWork_le` | plain search scores at most `stepLimit` layouts |
-| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (1,700,000) steps in total, at most `attemptFuel` (450,000) of search per attempt |
+| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (1,500,000) steps in total, at most `attemptFuel` (450,000) of search per attempt |
 
 Measured on this machine (12 cores), `node tools/timegen.mjs <binary>
-[blocks:seed …]`, one Lean call per map, seeds 31–36:
+[blocks:seed …]`, one Lean call per map, seeds 31–36 and 41–43:
 
 | Size | Times (ms) | Found a level |
 |---|---|---|
-| easy (5) | 1850, 612, 1354, 468, 1130, 2537 | 6 of 6 |
-| medium (7) | 9951, 2413, 9857, 4211, 8563, 8551 | 5 of 6 |
-| hard (8) | 7544, 1789, 5344, 4100, 9034, 8622 | 4 of 6 |
+| easy (5) | 2187, 1710, 1318, 574, 1131, 3502, 921, 1182, 1197 | 9 of 9 |
+| medium (7) | 8841, 2237, 1700, 2221, 1760, 6280, 3657, 6000, 7940 | 7 of 9 |
+| hard (8) | 7901, 2362, 4669, 7863, 5783, 1674, 7734, 7659, 8146 | 5 of 9 |
 
-Every call took at most 10 s (about 5 µs per step). A call that finds no
-level is retried by the bridge on a new map.
+Every call took under 9 s (about 5 µs per step). A call that finds no
+level is retried by the bridge on a new map, up to 3 maps, so a hard level
+can take up to about 25 s.
 
 **The search.** Transit choices are grouped by (routes, bridges); each group
 holds every station choice. The search splits each block's options (homes
