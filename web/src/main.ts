@@ -250,7 +250,9 @@ function urlWith(extra: Record<string, string | null>): string {
 /** Ask Lean for a new random town of this size (a few seeds, in case one can't be planned). */
 async function newTown(seed: number, size: Size, fresh = false): Promise<{ pr: PuzzleReply; info: LevelInfo }> {
   // `fresh`: a new game, so a seed that fails is replaced by another fresh one (never a played one)
-  for (let s2 = seed, tries = 0; tries < 6; s2 = fresh ? randomSeed() : s2 + 1, tries++) {
+  // Each request already tries up to 3 maps, so 2 requests (6 maps) is plenty and caps the wait.
+  for (let s2 = seed, tries = 0; tries < 2; s2 = fresh ? randomSeed() : s2 + 1, tries++) {
+    if (tries > 0) { const w = document.getElementById("wait-text"); if (w) w.textContent = "Still building your town…"; }
     const g = await engine.newPuzzle(s2, size);
     if (g.generated && g.puzzle) {
       const pz = g.puzzle.puzzle;

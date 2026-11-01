@@ -178,6 +178,7 @@ export class World {
     this.scene.add(this.level);
     this.blocks = []; this.anims = []; this.bridges = []; this.bridgeOn = []; this.spots = new Map(); this.segOwners = new Map();
     this.links = null; this.transit = null; this.hovered = null; this.glowOn = new Set();
+    this.waterAngle = null;
     this.outskirts = null; this.farmAt = null; this.farm = null; this.smoke = null; this.birds = null; this.lamps = null; this.border = null; this.riverLines = [];
     this.metro = null; this.air = null; this.wash = null; this.linkGroup = null;
   }
@@ -203,7 +204,10 @@ export class World {
     const mdir = mf ? norm(sub(v2(mf.x * MAP_SCALE, mf.y * MAP_SCALE), c)) : v2(-Math.sin(0.49 + jitter * 0.9), Math.cos(0.49 + jitter * 0.9));
     this.metroDir = mdir;
     this.ground(c);
-    const wet = this.water(c);
+    // the town's own shape decides its water: a lake in a deep bay, a sea past a long tip
+    const shapeWet = this.shapeWater(outer, c);
+    const wet0 = shapeWet ? (() => false) : this.water(c);
+    const wet = shapeWet ?? wet0;
     this.verge(outer, c);
     const riverSegs = pz.map.segments.map((s, i) => (s.terrain === "stream" ? i : -1)).filter((i) => i >= 0);
     this.riverSegs = new Set(riverSegs);
@@ -459,11 +463,79 @@ export class World {
   }
 
   /** Cosmetic water on one side: a river or a coast (or nothing). Returns a "wet" test. */
+  /**
+   * Water that follows the town's outline (looks only): if the outline has a deep bay, a lake fills
+   * it and opens out beyond; if the town is long with a pointed tip, the sea lies past the tip.
+   * Returns the "wet" test, or null when the shape asks for nothing special.
+   */
+  private shapeWater(outer: V2[], c: V2): ((p: V2) => boolean) | null {
+    const forced = new URLSearchParams(location.search).get("setting");
+    if (forced) return null;
+    const n = outer.length;
+    // convex hull (monotone chain) by index into `outer`
+    const idx = outer.map((_p, i) => i).sort((i, j) => outer[i].x - outer[j].x || outer[i].y - outer[j].y);
+    const cr = (o: V2, a: V2, b: V2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const half = (ids: number[]) => { const h: number[] = []; for (const i of ids) { while (h.length >= 2 && cr(outer[h[h.length - 2]], outer[h[h.length - 1]], outer[i]) <= 0) h.pop(); h.push(i); } return h; };
+    const lower = half(idx), upper = half([...idx].reverse());
+    const hull = [...lower.slice(0, -1), ...upper.slice(0, -1)];
+    const onHull = new Set(hull);
+    // deepest pocket: a run of outline points off the hull
+    let best: { pts: V2[]; depth: number; a: V2; b: V2 } | null = null;
+    for (let s0 = 0; s0 < n; s0++) {
+      if (!onHull.has(s0) || onHull.has((s0 + 1) % n)) continue;
+      const run: V2[] = [outer[s0]];
+      let k = (s0 + 1) % n;
+      while (!onHull.has(k)) { run.push(outer[k]); k = (k + 1) % n; }
+      run.push(outer[k]);
+      const a = run[0], b = run[run.length - 1], d = norm(sub(b, a)), nn = v2(-d.y, d.x);
+      const depth = Math.max(...run.map((q) => Math.abs((q.x - a.x) * nn.x + (q.y - a.y) * nn.y)));
+      if (!best || depth > best.depth) best = { pts: run, depth, a, b };
+    }
+    const mats = (color: string) => alive(new THREE.MeshStandardMaterial({ color: col(color), roughness: 0.35 }), { clouds: true, water: color === C.water });
+    const fill = (poly: V2[], y: number, color: string) => {
+      const g = new THREE.ShapeGeometry(new THREE.Shape(poly.map((q) => new THREE.Vector2(q.x, q.y))));
+      g.rotateX(-Math.PI / 2); g.translate(0, y, 0);
+      const m = new THREE.Mesh(g, mats(color)); m.receiveShadow = true; this.level.add(m);
+    };
+    const toDowntown = (dir: V2) => dir.x * this.metroDir.x + dir.y * this.metroDir.y > 0.35;
+    if (best && best.depth > this.radius * 0.18) {
+      // a lake in the bay: the pocket pulled back from the ring road, opening out past the hull edge
+      const mid0 = mid(best.a, best.b), outDir = norm(sub(mid0, c));
+      if (toDowntown(outDir)) return null;
+      const inner = best.pts.map((q) => add(q, mul(norm(sub(mid0, q)), 0)));
+      const spanD = norm(sub(best.b, best.a));
+      const far = this.radius * 0.9;
+      const ring: V2[] = [...inner.map((q) => add(q, mul(outDir, 0))), add(add(best.b, mul(spanD, far * 0.5)), mul(outDir, far)), add(add(best.a, mul(spanD, -far * 0.5)), mul(outDir, far))];
+      const lake = smoothClosed(ccw(ring), 4);
+      // pull the shore back from the town edge (verge and outer streets stay on land)
+      const shore = (k: number) => lake.map((q) => { let nearest = Infinity; for (const o of outer) nearest = Math.min(nearest, dist(o, q)); return nearest < k ? add(q, mul(outDir, k - nearest)) : q; });
+      fill(shore(1.3), -0.012, C.sand);
+      fill(shore(1.9), -0.008, C.shallows);
+      const water = shore(2.4);
+      fill(water, -0.004, C.water);
+      this.setting = "coast";
+      const sand = shore(1.0);
+      return (p: V2) => pointInPolygon(p, sand);
+    }
+    // a long town with a pointed tip: the sea lies past the tip
+    let tip = outer[0];
+    for (const q of outer) if (dist(q, c) > dist(tip, c)) tip = q;
+    const mean = outer.reduce((t, q) => t + dist(q, c), 0) / n;
+    const tipDir = norm(sub(tip, c));
+    if (dist(tip, c) / mean > 1.3 && !toDowntown(tipDir)) {
+      this.setting = "coast";
+      this.waterAngle = Math.atan2(tipDir.y, tipDir.x);
+      return this.water(c);
+    }
+    return null;
+  }
+  private waterAngle: number | null = null;
+
   private water(c: V2): (p: V2) => boolean {
     if (this.setting === "inland") return () => false;
     const rng = new Rng(this.seed ^ 0x5e7);
     // water lies on the side away from downtown
-    const a = Math.atan2(-this.metroDir.y, -this.metroDir.x) + rng.range(-0.6, 0.6);
+    const a = this.waterAngle ?? Math.atan2(-this.metroDir.y, -this.metroDir.x) + rng.range(-0.6, 0.6);
     const u = v2(Math.cos(a), Math.sin(a)), w = v2(-u.y, u.x);
     const ph = rng.range(0, 6);
     const near = (t: number) => this.radius + 3.2 + 0.9 * Math.sin(t * 0.09 + ph) + 0.4 * Math.sin(t * 0.23 + ph * 2);
