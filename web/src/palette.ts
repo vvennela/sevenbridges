@@ -27,6 +27,9 @@ export const C = {
   sand: "#F6E4B8",
   skyTop: "#BFE3FA",
   skyHaze: "#E6F3F5",
+  peach: "#FFC59E",
+  terracotta: "#E98A6A",
+  metro: "#7C8CF0",
 };
 
 /** Resident group colors, in group order. */
@@ -41,7 +44,7 @@ export const ROUTE_COLORS = ["#FF9E7A", "#6FC3E8", "#B79BEF", "#F5B94E"];
 export const SUBWAY_COLOR = "#7C8CF0";
 
 export const KIND_NAME: Record<string, string> = {
-  housing: "Homes", office: "Offices", shop: "Shops", park: "Park", bar: "Bar", empty: "Open lot",
+  housing: "Homes", office: "Offices", shop: "Shops", food: "Food", park: "Park", bar: "Bar", empty: "Open lot",
 };
 
 /** Plain-language names of the culture factors in Lean's reports, and friendly
@@ -79,8 +82,8 @@ export const FACTOR: Record<string, { name: string; love: string[]; wish: string
   },
   transit: {
     name: "Transit",
-    love: ["{G} love having a bus or subway close by", "{G} hop on transit right outside"],
-    wish: ["{G} wish a bus or subway stopped nearby", "{G} would love an easy ride into town"],
+    love: ["{G} love having a bus or metro close by", "{G} hop on transit right outside"],
+    wish: ["{G} wish a bus or metro stopped nearby", "{G} would love an easy ride into town"],
     hate: ["{G} don't like buses rumbling past", "{G} would rather transit stopped somewhere else"],
   },
   shops: {
@@ -89,6 +92,25 @@ export const FACTOR: Record<string, { name: string; love: string[]; wish: string
     wish: ["{G} wish a shop were closer", "{G} have a long walk to buy groceries"],
     hate: ["{G} don't want shops on their doorstep", "{G} find the shops next door too busy"],
   },
+};
+
+FACTOR.variety = {
+  name: "A mix nearby",
+  love: ["{G} love the mix of places around them", "{G} enjoy a lively mix of buildings next door"],
+  wish: ["{G} wish there were more kinds of places nearby", "{G} would like a livelier mix next door"],
+  hate: ["{G} would rather have a plainer street"],
+};
+FACTOR.food = {
+  name: "Food nearby",
+  love: ["{G} love the café around the corner", "{G} eat out close to home"],
+  wish: ["{G} wish there were a café nearby", "{G} would love somewhere to eat close by"],
+  hate: ["{G} find the restaurant next door too busy"],
+};
+FACTOR.cleanAir = {
+  name: "Clean air",
+  love: ["{G} breathe easy here", "{G} love the fresh air"],
+  wish: ["{G} wish the air were cleaner", "{G} are bothered by car fumes"],
+  hate: ["{G} don't mind the traffic"],
 };
 
 /** One of several sentences, picked steadily (same facts, same sentence). */

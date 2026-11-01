@@ -1,7 +1,7 @@
 // Shapes of the Lean binary's JSON replies (see web/fixtures/*.json).
 // The frontend only reads these; it never computes any of the values.
 
-export type Kind = "housing" | "office" | "shop" | "park" | "bar" | "empty";
+export type Kind = "housing" | "office" | "shop" | "food" | "park" | "bar" | "empty";
 
 export interface Building {
   kind: Kind;
@@ -30,6 +30,16 @@ export interface Puzzle {
   stationSites: number[];
   /** Segment indices where a bridge over the river may be built. */
   bridgeSites?: number[];
+  /** Version 2: the seed of this level's simulated day (Lean). */
+  simSeed?: number;
+  /** Version 2: Lean has proven this level's best plan. */
+  verified?: boolean;
+  /** Version 2: the metro line to downtown. `from` is the map-edge point it enters at;
+   * `sites` are the blocks along it where a station may go (falls back to stationSites). */
+  metro?: { from?: Point; sites?: number[] };
+  /** Lean V2: the blocks along the metro line (where a station may go), and where the line enters. */
+  metroSites?: number[];
+  metroEntry?: Point;
 }
 
 export interface BuildOption { building: Building; cost: number; jobs: number; residents: number }
@@ -93,6 +103,42 @@ export interface Report {
   stops?: StopReport[];
   buses?: BusReport[];
   leftBehind?: number;
+  /** Version 2: streets with cars on them (segment index, number of cars). */
+  streets?: { segment: number; cars: number }[];
+  /** Version 2: car trips in the morning. */
+  carTrips?: number;
+  /** Version 2: pollution per block (same order as the blocks). */
+  pollution?: number[];
+  /** Version 2: car traffic per street segment (same order as map.segments). */
+  traffic?: number[];
+  /** Version 2: Lean's simulated day, one entry per resident cat. */
+  cats?: CatDay[];
+}
+
+/** One leg of a cat's simulated day: from block to block (null = outside town / downtown). */
+export interface CatLeg {
+  /** A block number, or "downtown" (off the map, where the metro and the downtown jobs are). */
+  from: number | "downtown" | null;
+  to: number | "downtown" | null;
+  mode: Mode | "metro" | string;
+  /** "commute" | "lunch" | "evening" | "home" (or a number 0..3). */
+  phase: string | number;
+  /** Bus legs: the route ridden. */
+  route?: number;
+}
+export interface CatDay {
+  id: number | string;
+  home: number;
+  group: number;
+  type?: number;
+  /** "walker" | "bus" | "driver" */
+  mobility?: string;
+  /** "works" | "studies" | "retired" */
+  day?: string;
+  eatsOut?: boolean;
+  goesOut?: boolean;
+  happiness?: number;
+  legs: CatLeg[];
 }
 
 export interface BlockReport {
@@ -106,6 +152,15 @@ export interface BlockReport {
   moodImpact: number;
   /** Score with this building minus with this block empty. */
   scoreImpact: number;
+  /** Version 2 (optional): pollution and traffic on this block. Lean sends booleans:
+   * `traffic` = cats of this block or next door drive; `polluted` = traffic and no park next door. */
+  pollution?: number;
+  traffic?: number | boolean;
+  polluted?: boolean;
+  /** Cars that leave from this block. */
+  cars?: number;
+  /** Each neighbor: its value with THIS block empty minus its value now (this block's effect on it is −change). */
+  neighbors?: { block: number; change: number }[];
   groupImpact: { group: number; change: number }[];
 }
 export interface StopReport { route: number; block: number; boardings: number; alightings: number }
@@ -149,8 +204,13 @@ export type Reply<T> = { ok: true; data: T } | { ok: false; error: string };
 
 export interface GenerateReply {
   generated: boolean;
-  info: { attempts: number; work: number; workBudget: number };
+  info: { attempts: number; work: number; workBudget: number; randomPlay?: { median: number; p95: number; rated: number } };
   puzzle?: PuzzleReply;
+  /** Version 2: the best plan was proven before the level opens (Lean sends the theorem and seeds). */
+  verified?: boolean | { theorem?: string; simSeed?: number; bestScore?: number };
+  simSeed?: number;
+  /** The map seed actually used (may differ from the one asked for). */
+  seed?: number;
 }
 
 export type Request =

@@ -2,11 +2,11 @@
 // Usage: node scripts/screenshot.mjs [url] [outPrefix] [width] [height] [full|edit]
 import { chromium } from "playwright";
 
-const base = process.argv[2] ?? "http://localhost:5173/";
+const base = process.argv[2] ?? "http://localhost:5173/?demo";
 const out = process.argv[3] ?? "/tmp/sb-shots/shot";
 const W = Number(process.argv[4] ?? 1440), H = Number(process.argv[5] ?? 900);
 const flow = process.argv[6] ?? "full";
-const url = base + (base.includes("?") ? "&" : "?") + "test";
+const url = base + (base.includes("?") ? "&" : "?") + "test&nointro";
 
 const browser = await chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });

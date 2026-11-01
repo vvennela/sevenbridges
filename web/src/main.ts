@@ -12,7 +12,10 @@ import { Engine, engineUrl } from "./api";
 import { FACTOR_ICON, ICON } from "./icons";
 import { AVATAR_FUR, C, FACTOR, KIND_NAME, ROUTE_COLORS, SUBWAY_COLOR, groupColor, say } from "./palette";
 import { renderThumbs } from "./thumbs";
-import type { Building, EvalReply, Kind, Personality, PuzzleReply, Resident, Solution } from "./types";
+import type { Building, CatDay, EvalReply, Kind, Personality, PuzzleReply, Resident, Solution, Trip } from "./types";
+import backdropFixture from "../fixtures/puzzle.json";
+import { Transit } from "./transit";
+import type { Link } from "./overlays";
 import { World, type Feeling, type Target } from "./world";
 import type { CrimeSpot, Cue, IdleMode } from "./transit";
 import type { V2 } from "./geom";
@@ -49,7 +52,7 @@ let thumbs: Record<string, string> = {};
 const money = (k: number) => `$${Math.abs(k).toLocaleString()}k`;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const sameB = (a: Building, b: Building) => a.kind === b.kind && (a.stories === b.stories || a.kind === "empty");
-const hasFloors = (k: string) => k === "housing" || k === "office" || k === "shop";
+const hasFloors = (k: string) => k === "housing" || k === "office" || k === "shop" || k === "food";
 const floorsText = (b: Building) => `${b.stories} ${b.stories === 1 ? "floor" : "floors"}`;
 const plural = (g: string) => g;
 
@@ -60,7 +63,9 @@ function setHTML(id: string, html: string) {
 }
 
 function solution(): Solution {
-  const s: Solution = { build: st.build, routesOn: st.routesOn, station: st.station };
+  // `?mock` previews food and tall offices before Lean has them: Lean is sent the nearest V1 building
+  const build = MOCK && mockedKinds ? st.build.map((b) => b.kind === "food" ? { kind: "shop" as Kind, stories: 1 } : b.kind === "office" && b.stories > 3 ? { kind: "office" as Kind, stories: 3 } : b) : st.build;
+  const s: Solution = { build, routesOn: st.routesOn, station: st.station };
   // bridges go to Lean only when the puzzle has them (and not when they're mocked locally)
   if (st.pr?.puzzle.bridgeSites?.length && !MOCK) s.bridges = st.bridges;
   return s;
@@ -104,13 +109,79 @@ function mockPuzzle(pr: PuzzleReply) {
     [{ name: "Gardeners", share: 50, cares: ["parks"], hates: [] }, { name: "Bookworms", share: 30, cares: ["quiet"], hates: ["nightlife"] }, { name: "Shoppers", share: 20, cares: ["shops"], hates: [] }],
     [{ name: "Night owls", share: 60, cares: ["nightlife"], hates: [] }, { name: "Commuters", share: 40, cares: ["transit"], hates: [] }],
   ];
-  pz.groups.forEach((g, i) => { g.types = T[i % T.length]; });
+  pz.groups.forEach((g, i) => { if (!g.types?.length) g.types = T[i % T.length]; });
+  // Version 2 previews: food places and offices up to 5 floors (costs here are placeholders)
+  mockedKinds = !pr.options.some((o) => o.building.kind === "food");
+  if (mockedKinds) {
+    const at = pr.options.findIndex((o) => o.building.kind === "park" || o.building.kind === "bar");
+    pr.options.splice(at < 0 ? pr.options.length : at, 0, { building: { kind: "food", stories: 1 }, cost: 90, jobs: 0, residents: 0 }, { building: { kind: "food", stories: 2 }, cost: 200, jobs: 0, residents: 0 });
+  }
+  const o3 = pr.options.find((o) => o.building.kind === "office" && o.building.stories === 3);
+  if (o3 && !pr.options.some((o) => o.building.kind === "office" && o.building.stories > 3)) pr.options.splice(pr.options.indexOf(o3) + 1, 0, { building: { kind: "office", stories: 4 }, cost: o3.cost + 150, jobs: 80, residents: 0 }, { building: { kind: "office", stories: 5 }, cost: o3.cost + 300, jobs: 100, residents: 0 });
+  pz.simSeed ??= 7351;
+  pz.verified ??= true;
+}
+
+/** True when ?mock added food/tall offices that Lean doesn't know yet (they're translated when sent). */
+let mockedKinds = false;
+
+/** `?mock`: pollution, traffic and a simulated day made up from Lean's trips, to preview the V2 look. */
+function mockV2(r: EvalReply) {
+  const rep = r.report, pz = st.pr!.puzzle;
+  const n = pz.map.blocks.length;
+  const real = !!rep.cats || !!rep.streets || rep.blocks?.some((b) => typeof b.polluted === "boolean");
+  if (real) return r; // Lean sends the real day, streets and air: no mock data
+  if (!rep.pollution) {
+    const p = new Array<number>(n).fill(0);
+    for (const t of rep.trips) if (String(t.mode) === "car" && t.fromBlock !== null && t.fromBlock !== undefined) { p[t.fromBlock] += t.people; for (const j of world.linkedNeighbors(t.fromBlock)) p[j] += t.people / 2; }
+    st.build.forEach((b, i) => { if (b.kind === "office") p[i] += b.stories * 6; if (b.kind === "park") { p[i] = 0; for (const j of world.linkedNeighbors(i)) p[j] *= 0.5; } });
+    rep.pollution = p.map(Math.round);
+  }
+  if (!rep.traffic) {
+    const segs = pz.map.segments;
+    const tr = segs.map(() => 0);
+    for (const t of rep.trips) if (String(t.mode) === "car") for (const b of [t.fromBlock, t.toBlock]) {
+      if (b === null || b === undefined) continue;
+      const cs = pz.map.blocks[b].corners;
+      segs.forEach((sg, si) => { if (cs.includes(sg.a) && cs.includes(sg.b)) tr[si] += t.people; });
+    }
+    rep.traffic = tr;
+  }
+  if (!rep.cats && rep.residents?.length) {
+    const cats: CatDay[] = [];
+    let id = 0;
+    const shopsNear = (b: number, kinds: Kind[]) => [b, ...world.linkedNeighbors(b)].find((j) => kinds.includes(st.build[j]?.kind));
+    for (const res of rep.residents) {
+      const out = rep.trips.filter((t) => t.fromBlock === res.block && t.group === res.group);
+      for (let k = 0; k < Math.min(4, Math.ceil(res.people / 8)); k++) {
+        const trip: Trip | undefined = out[k % Math.max(1, out.length)];
+        const mode = String(trip?.mode ?? "walk");
+        const work = trip?.toBlock ?? null;
+        const legs: CatDay["legs"] = [];
+        if (trip) {
+          legs.push({ from: res.block, to: work, mode, phase: "morning", route: trip.routes[0] });
+          const lunch = work !== null ? shopsNear(work, ["food", "shop"]) : undefined;
+          if (lunch !== undefined && lunch !== work) legs.push({ from: work, to: lunch, mode: "walk", phase: "lunch" }, { from: lunch, to: work, mode: "walk", phase: "lunch" });
+          const night = (k % 2) ? shopsNear(res.block, ["bar", "park", "food"]) : undefined;
+          if (night !== undefined && night !== res.block) {
+            legs.push({ from: work, to: night, mode: mode === "car" ? "car" : "walk", phase: "evening" }, { from: night, to: res.block, mode: "walk", phase: "home" });
+          } else legs.push({ from: work, to: res.block, mode, phase: "evening", route: trip.routes[0] });
+        } else {
+          const park = shopsNear(res.block, ["park", "shop", "food"]);
+          if (park !== undefined && park !== res.block) legs.push({ from: res.block, to: park, mode: "walk", phase: "lunch" }, { from: park, to: res.block, mode: "walk", phase: "evening" });
+        }
+        if (legs.length) cats.push({ id: id++, home: res.block, group: res.group, type: res.type, mobility: mode === "car" ? "driver" : mode === "bus" ? "bus" : "walker", legs });
+      }
+    }
+    rep.cats = cats;
+  }
+  return r;
 }
 /** In mock mode, give each resident entry a personality so the mood hover can group by it. */
 function mockTypes(r: EvalReply) {
   if (!MOCK) return r;
-  for (const x of r.report.residents ?? []) x.type = (x.block + x.group) % (st.pr!.puzzle.groups[x.group].types?.length ?? 1);
-  return r;
+  for (const x of r.report.residents ?? []) x.type ??= (x.block + x.group) % (st.pr!.puzzle.groups[x.group].types?.length ?? 1);
+  return mockV2(r);
 }
 
 const CUE_OF: Record<string, Cue> = { nightlife: "moon", parks: "leaf", quiet: "book", shops: "bag", transit: "ticket", shortCommute: "star", walkability: "leaf" };
@@ -156,53 +227,170 @@ async function refreshLive() {
 
 const SIZES = ["easy", "medium", "hard"] as const;
 type Size = (typeof SIZES)[number];
-/** `?size=easy|medium|hard` (5 / 7 / 9 blocks) for new neighborhoods. */
+/** `?size=easy|medium|hard` (5 / 7 / 8 blocks) for new neighborhoods. */
 const wantedSize: Size = (() => { const s = new URLSearchParams(location.search).get("size"); return (SIZES as readonly string[]).includes(s ?? "") ? (s as Size) : "medium"; })();
 const wantedSeed = (() => {
   const s = new URLSearchParams(location.search).get("seed");
   return s !== null && /^\d+$/.test(s) ? Number(s) : null;
 })();
 
-/** Old Harbor (the demo), or a newly generated neighborhood if `?seed=N` asks for it. */
-async function loadPuzzle(): Promise<PuzzleReply> {
-  if (wantedSeed === null) return engine.demo();
-  const current = await engine.puzzle();
-  if (current.puzzle.name === `Neighborhood #${wantedSeed}`) return current;
-  for (let seed = wantedSeed, tries = 0; tries < 3; seed++, tries++) {
-    $("loading-text").textContent = "Planning a brand-new neighborhood…";
-    const g = await engine.newPuzzle(seed, wantedSize);
-    if (g.generated && g.puzzle) {
-      if (seed !== wantedSeed) history.replaceState(null, "", `?seed=${seed}&size=${wantedSize}`);
-      return g.puzzle;
-    }
-  }
-  throw new Error("Couldn't plan a neighborhood this time");
+/** The level being played: its seed, size, and what Lean says about it. */
+interface LevelInfo { seed: number; size: Size; simSeed?: number; verified?: boolean; randomMedian?: number }
+let level: LevelInfo | null = null;
+const params = new URLSearchParams(location.search);
+
+/** Keep debug flags (?mock, ?test, ...) when the URL changes. */
+function urlWith(extra: Record<string, string | null>): string {
+  const q = new URLSearchParams(location.search);
+  for (const [k, v] of Object.entries(extra)) if (v === null) q.delete(k); else q.set(k, v);
+  const str = q.toString().replace(/=(&|$)/g, "$1");
+  return str ? `?${str}` : location.pathname;
 }
 
-async function start() {
+/** Ask Lean for a new random town of this size (a few seeds, in case one can't be planned). */
+async function newTown(seed: number, size: Size): Promise<{ pr: PuzzleReply; info: LevelInfo }> {
+  for (let s2 = seed, tries = 0; tries < 6; s2++, tries++) {
+    const g = await engine.newPuzzle(s2, size);
+    if (g.generated && g.puzzle) {
+      const pz = g.puzzle.puzzle;
+      const v = g.verified;
+      const proof = typeof v === "object" && v !== null ? v : null;
+      return { pr: g.puzzle, info: { seed: g.seed ?? s2, size, simSeed: g.simSeed ?? proof?.simSeed ?? pz.simSeed, verified: !!(proof ?? v ?? pz.verified), randomMedian: g.info.randomPlay?.median } };
+    }
+  }
+  throw new Error("Couldn't plan a town this time");
+}
+
+const randomSeed = () => 1 + Math.floor(Math.random() * 99998);
+
+// ---------- title screen ----------
+
+type Screen = "home" | "rules" | "size" | "wait";
+function showScreen(sc: Screen) {
+  document.body.classList.add("titling");
+  $("title").classList.remove("hidden");
+  $("title").dataset.screen = sc;
+  for (const el of document.querySelectorAll<HTMLElement>(".title-card")) el.classList.toggle("on", el.dataset.screen === sc);
+}
+
+/** The title backdrop: a sample town, fully built, buses running and cats out for a walk. Looks only. */
+function loadBackdrop() {
+  const pr = structuredClone((backdropFixture as unknown as { data: PuzzleReply }).data);
+  pr.puzzle.name = "Backdrop";
+  world.load(pr);
+  const look: Building[] = [
+    { kind: "housing", stories: 2 }, { kind: "office", stories: 5 }, { kind: "park", stories: 1 }, { kind: "food", stories: 1 },
+    { kind: "housing", stories: 3 }, { kind: "shop", stories: 2 }, { kind: "bar", stories: 1 }, { kind: "housing", stories: 1 }, { kind: "office", stories: 3 },
+  ];
+  const build = pr.puzzle.map.blocks.map((_b, i) => look[i % look.length]);
+  world.setBuild(build, pr.puzzle.stationSites[0] ?? null, true);
+  world.transit?.setRoutes(pr.puzzle.routes.map(() => true));
+  if (world.transit) world.transit.downtownDir = world.downtown;
+  const homes = build.map((b, i) => (b.kind === "housing" ? i : -1)).filter((i) => i >= 0);
+  const others = build.map((b, i) => (b.kind !== "housing" ? i : -1)).filter((i) => i >= 0);
+  const trips: Trip[] = [];
+  homes.forEach((h, k) => others.forEach((o, j) => trips.push({ cost: 0, fromBlock: h, toBlock: o, group: (k + j) % 2, mode: (k + j) % 3 === 0 ? "car" : "walk", people: 10, routes: [] })));
+  world.transit?.setTrips(trips);
+  world.orbit = 0.035;
+  world.titleView();
+}
+
+function startTitle() {
+  loadBackdrop();
+  showScreen("home");
+  $("loading").classList.add("gone");
+  document.querySelectorAll<HTMLElement>(".rule-ic").forEach((el) => {
+    const ic = el.dataset.ic;
+    el.innerHTML = ic === "heart" ? ICON.heart() : ic === "bus" ? ICON.bus("#6FC3E8") : ic === "coin" ? ICON.coin() : ic === "star" ? ICON.star(true) : `<img src="${renderThumbs(["housing"])["housing"]}" alt=""/>`;
+  });
+  document.querySelectorAll<HTMLElement>(".size-blocks").forEach((el) => {
+    const n = Number(el.dataset.n);
+    el.innerHTML = Array.from({ length: n }, (_, k) => `<i style="--k:${k}"></i>`).join("");
+  });
+}
+
+/** Start → pick a size → Lean makes the town and proves its best plan → play. */
+async function playNew(size: Size, seed = randomSeed()) {
+  showScreen("wait");
+  $("wait-text").textContent = "Generating your town and proving its best plan…";
   try {
-    const pr = await loadPuzzle();
-    if (MOCK) mockPuzzle(pr);
-    st.pr = pr;
-    const pz = pr.puzzle;
-    st.bridges = (pz.bridgeSites ?? []).map(() => false);
-    st.build = pz.fixed.map((f) => f ?? emptyB());
-    st.routesOn = pz.routes.map(() => false);
-    world.load(pr);
-    document.body.dataset.setting = world.setting;
-    thumbs = renderThumbs(kinds());
-    world.setBuild(st.build, st.station, true);
-    world.transit?.setRoutes(st.routesOn);
-    world.setBridges(st.bridges);
-    if (world.transit) world.transit.typeCues = pz.groups.map((g) => (g.types ?? []).map((t) => ({ cue: cueOf(t), share: t.share })));
-    renderTown();
-    render();
-    coach();
-    $("loading").classList.add("gone");
-    void refreshLive();
+    const { pr, info } = await newTown(seed, size);
+    history.replaceState(null, "", urlWith({ seed: String(info.seed), size: info.size }));
+    enterLevel(pr, info);
+  } catch (e) {
+    $("wait-text").textContent = `${(e as Error).message}. Trying again…`;
+    setTimeout(() => void playNew(size), 2000);
+  }
+}
+
+/** Open a level: draw the town, set up the tray, and show its title card. */
+function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
+  if (MOCK) mockPuzzle(pr);
+  if (info) { info.simSeed ??= pr.puzzle.simSeed; info.verified ??= pr.puzzle.verified; }
+  level = info;
+  pickSize = info?.size ?? pickSize;
+  st.pr = pr;
+  st.mode = "edit"; st.live = null; st.built = null; st.tool = null; st.station = null; st.postcardOpen = false;
+  const pz = pr.puzzle;
+  st.bridges = (pz.bridgeSites ?? []).map(() => false);
+  // Lean may send `fixed: []` (no starting blocks): every block starts as an open lot
+  st.build = pz.map.blocks.map((_b, i) => pz.fixed[i] ?? emptyB());
+  st.routesOn = pz.routes.map(() => false);
+  if (!pz.stationSites?.length && pz.metroSites?.length) pz.stationSites = pz.metroSites;
+  world.orbit = 0;
+  world.load(pr);
+  if (world.transit) world.transit.downtownDir = world.downtown;
+  document.body.dataset.setting = world.setting;
+  thumbs = renderThumbs(kinds());
+  world.setBuild(st.build, st.station, true);
+  world.transit?.setRoutes(st.routesOn);
+  world.setBridges(st.bridges);
+  if (world.transit) world.transit.typeCues = pz.groups.map((g) => (g.types ?? []).map((t) => ({ cue: cueOf(t), share: t.share })));
+  for (const k of ["town", "meter", "tools", "transit"]) lastHTML.delete(k);
+  document.body.classList.remove("titling");
+  $("title").classList.add("hidden");
+  renderTown();
+  render();
+  showIntro();
+  $("loading").classList.add("gone");
+  void refreshLive();
+}
+
+/** The level's title card: its seeds, and that Lean has proven its best plan. */
+function showIntro() {
+  if (!st.pr || params.has("nointro")) { coach(); return; }
+  const pz = st.pr.puzzle;
+  const meta = [
+    level ? `Town #${level.seed}` : pz.name,
+    level?.simSeed !== undefined ? `simulation #${level.simSeed}` : null,
+    level?.verified ? `best plan proven ✓` : null,
+  ].filter(Boolean).join(" · ");
+  const sizeName = level ? `${level.size[0].toUpperCase()}${level.size.slice(1)} town, ${pz.map.blocks.length} blocks` : `${pz.map.blocks.length} blocks`;
+  const who = pz.groups.map((g, i) => `<span class="intro-who">${ICON.avatar(groupColor(i), AVATAR_FUR[i % AVATAR_FUR.length], i % 2 ? "scarf" : "tie")}${esc(g.name)} <small>${g.share}%</small></span>`).join("");
+  setHTML("intro", `<div class="intro-card">
+    <div class="intro-kicker">${esc(sizeName)}</div>
+    <h2>${esc(level ? `Town #${level.seed}` : pz.name)}</h2>
+    ${level?.simSeed !== undefined || level?.verified ? `<div class="intro-meta">${esc(meta)}</div>` : ""}
+    ${level?.verified ? `<p class="intro-proof">Lean checked this town's best plan against its simulated day${level.randomMedian !== undefined ? ` (random play scores about ${level.randomMedian}/100)` : ""}.</p>` : ""}
+    <div class="intro-whos">${who}</div>
+    <button class="tbtn primary" data-act="go">Let's build</button></div>`);
+  $("intro").classList.remove("hidden");
+}
+function hideIntro() { $("intro").classList.add("hidden"); coach(); }
+
+async function boot() {
+  try {
+    if (wantedSeed !== null) {
+      $("loading-text").textContent = "Generating your town and proving its best plan…";
+      const { pr, info } = await newTown(wantedSeed, wantedSize);
+      if (info.seed !== wantedSeed) history.replaceState(null, "", urlWith({ seed: String(info.seed), size: info.size }));
+      enterLevel(pr, info);
+    } else if (params.has("demo")) {
+      enterLevel(await engine.demo(), null);
+    } else startTitle();
   } catch (e) {
     $("loading-text").textContent = `${(e as Error).message}. Retrying…`;
-    setTimeout(start, 2500);
+    setTimeout(boot, 2500);
   }
 }
 
@@ -217,10 +405,67 @@ function feelingsFrom(r: EvalReply | null): Feeling[] {
   return out;
 }
 
+/** Pollution per block from Lean (report.pollution, or the per-block entries), or null. */
+function pollutionOf(r: EvalReply | null): number[] | null {
+  const rep = r?.report;
+  if (rep?.pollution?.length) return rep.pollution;
+  if (rep?.blocks?.some((b) => typeof b.polluted === "boolean")) {
+    const out = st.build.map(() => 0);
+    for (const b of rep.blocks) out[b.block] = b.polluted ? 1 : 0;
+    return out;
+  }
+  if (rep?.blocks?.some((b) => b.pollution !== undefined)) {
+    const out = st.build.map(() => 0);
+    for (const b of rep.blocks) out[b.block] = b.pollution ?? 0;
+    return out;
+  }
+  return null;
+}
+
+/** Set by Build: the next showLife starts Lean's day over from the morning. */
+let restartDay = false;
+
 function showLife(r: EvalReply | null) {
   const s = shownSolution();
   world.setFeelings(feelingsFrom(r));
-  world.transit?.setTrips(r?.report.trips ?? null);
+  const rep0 = r?.report;
+  // Lean's simulated day when it sends one; otherwise the trips, looping
+  if (rep0?.cats?.length) {
+    world.transit?.setTrips(null);
+    // edits keep the time of day; only Build starts the day over from the morning
+    world.transit?.setDay(rep0.cats, undefined, restartDay);
+    restartDay = false;
+  } else {
+    world.transit?.setDay(null);
+    world.transit?.setTrips(rep0?.trips ?? null);
+  }
+  // air: haze over polluted blocks, fresh air over parks (only when Lean reports pollution)
+  const pol = pollutionOf(r);
+  const top = pol ? Math.max(1, ...pol) : 1;
+  world.setAir(pol ? pol.map((v) => v / top) : null, s.build.map((b, i) => (b.kind === "park" ? i : -1)).filter((i) => i >= 0));
+  // busy streets: cars looping and a warm wash, as much as Lean's traffic says
+  // Lean's streets: [{segment, cars}] — a wash and that many looping cars on exactly those streets
+  let tl: number[] | null = null;
+  if (rep0?.streets) {
+    const pz = st.pr!.puzzle;
+    const cars = pz.map.segments.map(() => 0);
+    for (const x of rep0.streets) if (x.segment >= 0 && x.segment < cars.length) cars[x.segment] = x.cars;
+    const top = Math.max(1, ...cars);
+    tl = cars.map((c) => (c > 0 ? 0.25 + 0.75 * (c / top) : 0));
+    world.transit?.setTraffic(cars, true);
+  } else {
+    const tr = rep0?.traffic;
+    const tmax = tr ? Math.max(1, ...tr) : 1;
+    tl = tr ? tr.map((v) => v / tmax) : null;
+    world.transit?.setTraffic(tl);
+  }
+  // Lean's per-block fact "cats of this block or next door drive": wash the streets around those blocks
+  if (!tl && !rep0?.streets && rep0?.blocks?.some((b) => b.traffic === true)) {
+    const pz = st.pr!.puzzle;
+    const busy = new Set(rep0.blocks.filter((b) => b.traffic === true).map((b) => b.block));
+    tl = pz.map.segments.map((sg) => pz.map.blocks.some((bl, i) => busy.has(i) && bl.corners.includes(sg.a) && bl.corners.includes(sg.b)) ? 0.5 : 0);
+  }
+  world.setTraffic(tl);
   // residents idling: in their own yards, on benches and in parks (looks only)
   const res = r?.report.residents ?? [];
   const groups = [...new Set(res.map((x) => x.group))];
@@ -364,7 +609,7 @@ function toggleBridge(i: number) {
 function setStation(s: number | null) {
   if (!canEdit()) return;
   st.station = s;
-  world.transit?.setStation(s);
+  world.setBuild(st.build, s);
   edits++;
   void refreshLive();
   render();
@@ -390,7 +635,7 @@ async function build() {
     const r = mockTypes(await engine.evaluate(solution(), true));
     st.built = r;
     st.live = r;
-    setTimeout(() => { showLife(r); countUp(r.rating?.rating ?? 0); if ((r.rating?.rating ?? 0) >= 100) world.heartBurst(); }, 700);
+    setTimeout(() => { restartDay = true; showLife(r); countUp(r.rating?.rating ?? 0); if ((r.rating?.rating ?? 0) >= 100) world.heartBurst(); }, 700);
   } catch (e) {
     st.error = (e as Error).message;
   }
@@ -439,12 +684,17 @@ function renderTown() {
       ${g.types?.length ? `<span class="types">${g.types.map((t) => `<span class="ptype" data-tip="${esc(t.name)}: ${t.cares.map((f) => `loves ${(FACTOR[f]?.name ?? f).toLowerCase()}`).concat(t.hates.map((f) => `dislikes ${(FACTOR[f]?.name ?? f).toLowerCase()}`)).join(", ")}">${t.cares[0] ? FACTOR_ICON[t.cares[0]] ?? "" : ""}${esc(t.name)} <small>${t.share}%</small></span>`).join("")}</span>` : ""}
     </div>`;
   }).join("");
-  const diff = wantedSeed !== null ? `${wantedSize[0].toUpperCase() + wantedSize.slice(1)} · ${pz.map.blocks.length} blocks` : `Demo · ${pz.map.blocks.length} blocks`;
-  setHTML("town", `<div class="town-head"><h1>${esc(pz.name)}</h1></div>
-    <div class="diff-row"><span class="diff">${diff}</span>
-      <span class="newp"><span class="sizes">${SIZES.map((s) => `<button class="size ${s === pickSize ? "on" : ""}" data-size="${s}" data-tip="New neighborhoods: ${s === "easy" ? "5" : s === "medium" ? "7" : "9"} blocks">${s[0].toUpperCase() + s.slice(1)}</button>`).join("")}</span>
-      <button class="icon-btn" data-act="new" title="Try a new neighborhood">${ICON.dice()}</button></span></div>
-    <p class="goal">Make your residents happy and keep the town busy, within budget.</p>
+  const sizeName = level ? level.size[0].toUpperCase() + level.size.slice(1) : "Demo";
+  const chips = [
+    `<span class="diff">${sizeName}, ${pz.map.blocks.length} blocks</span>`,
+    level?.simSeed !== undefined ? `<span class="chip" data-tip="The seed of this town's simulated day: every cat's traits and day come from it">Sim #${level.simSeed}</span>` : "",
+    level?.verified ? `<span class="chip ok" data-tip="Lean has proven the best plan for this town, so 100 means no plan can do better">${ICON.check()} Best plan proven</span>` : "",
+  ].join("");
+  setHTML("town", `<div class="town-head"><h1>${esc(level ? `Town #${level.seed}` : pz.name)}</h1>
+      <span class="head-btns"><button class="icon-btn" data-act="new" data-tip="A new random town, same size">${ICON.dice()}</button>
+      <button class="icon-btn" data-act="title" data-tip="Back to the title screen">${ICON.home()}</button></span></div>
+    <div class="diff-row">${chips}</div>
+    <p class="goal">Make your cats happy and your town productive, within budget.</p>
     ${rows}`);
 }
 
@@ -489,8 +739,11 @@ function renderMeter() {
     </div>
     <div class="stars">${stars}</div>
     <div class="ring-cap">${rated === null ? (st.mode === "built" ? "Lean is rating…" : "Build to see your rating") : rated >= 100 ? "A perfect neighborhood" : "Your rating"}</div>
+    <div class="pair">
+      <div class="pair-cell" data-tip="Happiness: how much your cats like their homes and what's next door">${ICON.heart()}<b>${r ? r.report.happiness.toLocaleString() : "0"}</b><span>Happiness</span></div>
+      <div class="pair-cell" data-tip="Productivity: the work done in offices by cats who can get there">${ICON.work()}<b>${r ? r.report.productivity.toLocaleString() : "0"}</b><span>Productivity</span></div>
+    </div>
     <div class="bars">
-      <div class="bar-row" data-tip="Total happiness of your residents (from Lean)">${ICON.heart()}<span class="bar-val">${r ? r.report.happiness.toLocaleString() : "0"}</span><span class="bar-label">happiness</span></div>
       <div class="bar-row ${left !== null && left < 0 ? "over" : ""}" data-tip="Money left of ${money(pz.budget)}">${ICON.coin()}
         <span class="bar-val">${left === null ? money(pz.budget) : (left < 0 ? "−" : "") + money(left)}</span><span class="bar-label">${left !== null && left < 0 ? "over budget" : "left"}</span>
         <span class="money-bar"><span style="width:${spent * 100}%"></span></span></div>
@@ -503,7 +756,8 @@ function renderTray() {
   const editing = canEdit();
   const tiles = kinds().map((k) => {
     const opts = pr.options.filter((o) => o.building.kind === k).sort((a, b) => a.cost - b.cost);
-    const price = money(opts[0].cost);
+    // the cheapest height on the tile ("from" when there are taller ones); every height is in the tooltip
+    const price = `${opts.length > 1 ? "from " : ""}${money(opts[0].cost)}`;
     const tip = hasFloors(k) && opts.length > 1
       ? `${KIND_NAME[k]}: ${opts.map((o) => `${o.building.stories} ${o.building.stories === 1 ? "floor" : "floors"} ${money(o.cost)}`).join(", ")}`
       : `${KIND_NAME[k]}: ${price}`;
@@ -520,8 +774,8 @@ function renderTray() {
       data-tip="${esc(r.name)} bus: ${money(nb.routeCost)}. It needs ${nb.minRouteRiders}+ riders a day, ${nb.minNewRiders}+ of them new. Click to turn it ${routes[i] ? "off" : "on"}.">
       <span class="tile-icon">${ICON.bus(ROUTE_COLORS[i % ROUTE_COLORS.length])}</span><span class="tile-name">${esc(r.name)}</span><span class="led"></span>${world.transit?.routeBlocked(i) ? `<span class="needs" data-tip="${esc(r.name)} crosses the river: it needs a bridge to run">${ICON.bridge()}</span>` : ""}</button>`).join("");
   const sub = pr.puzzle.stationSites.length ? `<button class="tile small ${station !== null ? "on" : ""} ${st.tool === "subway" ? "picked" : ""}" data-tool="subway" ${editing ? "" : "disabled"}
-      data-tip="Subway station: ${money(nb.stationCost)}. It needs ${nb.minStationRiders}+ riders a day. Pick it, then click a faint entrance on the map.">
-      <span class="tile-icon">${ICON.subway(SUBWAY_COLOR)}</span><span class="tile-name">Subway</span><span class="led"></span></button>` : "";
+      data-tip="Metro station: ${money(nb.stationCost)}. The metro runs to downtown; it needs ${nb.minStationRiders}+ riders a day. Pick it, then click a faint entrance on the map.">
+      <span class="tile-icon">${ICON.subway(SUBWAY_COLOR)}</span><span class="tile-name">Metro</span><span class="led"></span></button>` : "";
   const nBridge = st.bridges.filter(Boolean).length;
   const bridgeTile = pr.puzzle.bridgeSites?.length ? `<button class="tile small ${nBridge ? "on" : ""} ${st.tool === "bridge" ? "picked" : ""}" data-tool="bridge" ${editing ? "" : "disabled"}
       data-tip="Bridge${nb.bridgeCost !== undefined ? `: ${money(nb.bridgeCost)}` : ""}. Blocks across the river are neighbors only when a bridge joins them, and buses need one to cross. Pick it, then click a faint bridge on the river.">
@@ -569,6 +823,7 @@ function renderPostcard() {
   const r = st.built;
   const show = st.mode === "built" && st.postcardOpen;
   el.classList.toggle("hidden", !show);
+  document.body.classList.toggle("pc-open", show);
   if (!show) return;
   if (!r) { setHTML("postcard", `<div class="pc-wait">Lean is rating your neighborhood…</div>`); return; }
   const rating = r.rating?.rating ?? 0;
@@ -580,10 +835,6 @@ function renderPostcard() {
     <div class="pc-sub">Rated ${rating} out of 100. A 100 means no plan can do better, and Lean has proved it.</div>
     <div class="pc-head">${esc(headline)}</div>
     <ul class="pc-notes">${notes.map((n) => `<li><span class="pc-ic">${n.icon}</span><span>${esc(n.text)}</span></li>`).join("")}</ul>
-    <div class="pc-facts">
-      <span data-tip="Happiness of all residents">${ICON.heart()} ${r.report.happiness.toLocaleString()}</span>
-      <span data-tip="Jobs filled, minus crime">${ICON.briefcase()} ${r.report.productivity.toLocaleString()}</span>
-    </div>
     ${whyRating(r)}
     <div class="pc-actions">
       <button class="btn primary" data-act="keep">${rating >= 100 ? "Keep building" : "Try for 100"}</button>
@@ -771,7 +1022,7 @@ function routeDetails(i: number, r: EvalReply | null): string {
 
 function stationDetails(r: EvalReply | null): string {
   if (!r || shownSolution().station === null) return "";
-  const flagged = r.problems.filter((p) => /station|subway/i.test(p));
+  const flagged = r.problems.filter((p) => /station|subway|metro/i.test(p));
   return `<div class="card-sec"><div class="whys"><b>Riders:</b>${r.report.stationRiders} a day (needs ${st.pr!.numbers.minStationRiders})</div>
     ${flagged.length ? flagged.map((p) => `<div class="flag bad">${esc(p)}</div>`).join("") : `<div class="flag ok">Lean found no problem with the station</div>`}</div>`;
 }
@@ -785,6 +1036,7 @@ function buildingInfo(kind: Kind): string {
   if (kind === "park") factors.push({ f: "parks", note: "a park on or next to a home" });
   if (kind === "bar") factors.push({ f: "nightlife", note: "a bar on or next to a home" }, { f: "quiet", note: "a bar next door breaks the quiet" });
   if (kind === "shop") factors.push({ f: "shops", note: "a shop on or next to a home; shops count by their customers" });
+  if (kind === "food") factors.push({ f: "food", note: "lunch for workers nearby, dinner for residents" });
   if (opts.some((o) => o.jobs > 0)) factors.push({ f: "shortCommute", note: "jobs close to homes mean short trips" }, { f: "walkability", note: "work, shops and a park within walking distance" });
   if (opts.some((o) => o.building.stories >= 3)) factors.push({ f: "quiet", note: "a 3-floor building next door breaks the quiet" });
   const who = (f: string) => {
@@ -812,7 +1064,7 @@ function whyRating(r: EvalReply): string {
   }
   void pz;
   const row = (k: string, v: string, neg = false) => `<div class="why-row ${neg ? "neg" : ""}"><span>${k}</span><b>${v}</b></div>`;
-  return `<details class="why-rating" open><summary>Why this rating</summary>
+  return `<details class="why-rating"><summary>Why this rating</summary>
     ${row("Happiness", rep.happiness.toLocaleString())}
     ${row("Jobs filled", rep.productivity.toLocaleString())}
     ${row("Crime penalty", rep.crimePenalty ? `−${rep.crimePenalty}` : "0", rep.crimePenalty > 0)}
@@ -869,7 +1121,7 @@ function renderCard(t: Target) {
   } else if (t.kind === "site") {
     const built = s.station === t.i;
     html = `<div class="card-row"><span class="card-ic">${ICON.subway(SUBWAY_COLOR)}</span><div>
-        <div class="card-title">${built ? "Subway station" : "A subway station could go here"}</div>
+        <div class="card-title">${built ? "Metro station" : "A metro station could go here"}</div>
         <div class="card-sub">${money(nb.stationCost)}, needs ${nb.minStationRiders} riders a day</div></div></div>
       ${stationDetails(shownReply())}
       ${canEdit() ? `<button class="btn small" data-act="${built ? "unstation" : "station"}" data-site="${t.i}">${built ? "Remove station" : "Build station here"}</button>` : ""}`;
@@ -892,14 +1144,23 @@ function placeCard() {
   const p = cardTarget.kind === "route" ? { x: mouse.x, y: mouse.y - 18 } : world.screenOf(cardTarget);
   if (!p) return;
   const w = el.offsetWidth, h = el.offsetHeight;
-  const x = Math.max(12, Math.min(window.innerWidth - w - 12, p.x - w / 2));
-  let y = Math.max(12, Math.min(window.innerHeight - h - 130, p.y - h - 14));
-  // never sit on top of the HUD panels
-  for (const id of ["town", "meter", "postcard"]) {
-    const r = $(id).getBoundingClientRect();
-    if (!r.width || $(id).classList.contains("hidden")) continue;
-    if (x < r.right && x + w > r.left && y < r.bottom && y + h > r.top) y = r.bottom + 10;
-  }
+  const W = window.innerWidth, H = window.innerHeight;
+  // try above the block, below it, then to either side; the card must not cover the block
+  // itself (clicks go there) or the HUD panels. With neighbor arcs showing, below goes first.
+  const fit = (x: number, y: number) => ({ x: Math.max(12, Math.min(W - w - 12, x)), y: Math.max(12, Math.min(H - h - 130, y)) });
+  const above = fit(p.x - w / 2, p.y - h - 14), under = fit(p.x - w / 2, p.y + 46);
+  const right = fit(p.x + 60, p.y - h / 2), left = fit(p.x - w - 60, p.y - h / 2);
+  const below = links.length > 0 && cardTarget.kind === "block";
+  const farRight = fit(p.x + 200, p.y - h / 2), farLeft = fit(p.x - w - 200, p.y - h / 2), high = fit(p.x - w / 2, p.y - h - 160);
+  const order = below ? [under, right, left, above, farRight, farLeft, high] : [above, under, right, left, farRight, farLeft, high];
+  const panels = ["town", "meter", "postcard", "lenses"].map((id) => $(id)).filter((e) => !e.classList.contains("hidden") && e.offsetWidth).map((e) => e.getBoundingClientRect());
+  // neighbor arc labels must stay visible too
+  const labels = links.map((l) => world.linkLabelAt(l.from, l.to, l.tone === "work" ? 0.28 : 0.5)).filter((q): q is { x: number; y: number } => !!q);
+  const hits = (c: { x: number; y: number }) =>
+    panels.some((r) => c.x < r.right && c.x + w > r.left && c.y < r.bottom && c.y + h > r.top) ||
+    labels.some((q) => q.x > c.x - 40 && q.x < c.x + w + 40 && q.y > c.y - 20 && q.y < c.y + h + 20) ||
+    (p.x > c.x - 30 && p.x < c.x + w + 30 && p.y + 20 > c.y - 30 && p.y + 20 < c.y + h + 30);
+  const { x, y } = order.find((c) => !hits(c)) ?? order[0];
   el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 }
 
@@ -913,6 +1174,150 @@ function showCard(t: Target | null) {
   placeCard();
 }
 function hideCard() { cardTarget = null; $("card").classList.add("hidden"); }
+
+// ---------- neighbors: who affects whom (hover) ----------
+
+/** What a building next door gives a home, in Lean's factor names. */
+function gives(b: Building): string[] {
+  const f: string[] = [];
+  if (b.kind === "park") f.push("parks");
+  if (b.kind === "bar") f.push("nightlife");
+  if (b.kind === "shop") f.push("shops");
+  if (b.kind === "food") f.push("food");
+  return f;
+}
+/** Does a building next door take away a home's quiet (a bar, or 3 floors and up)? */
+const breaksQuiet = (b: Building) => b.kind === "bar" || (b.kind !== "empty" && b.kind !== "park" && b.stories >= 3);
+
+interface LinkInfo { from: number; to: number; tone: Link["tone"]; html: string; tip: string }
+let links: LinkInfo[] = [];
+
+/**
+ * How block `src` affects the cats living on home block `home`. Everything is read from Lean:
+ * which factors the residents there have (`has`), what their group and type love or dislike,
+ * and how many of them there are. Nothing is scored here.
+ */
+function effectOn(home: number, src: number): LinkInfo | null {
+  const r = shownReply();
+  const pz = st.pr!.puzzle;
+  const here = (r?.report.residents ?? []).filter((x) => x.block === home);
+  if (!here.length) return null;
+  const b = st.build[src];
+  let love = 0, hate = 0;
+  const icons = new Set<string>();
+  const tastes = (x: Resident) => {
+    const g = pz.groups[x.group], ty = x.type !== undefined ? g.types?.[x.type] : undefined;
+    return { cares: ty ? ty.cares : g.cares, hates: ty ? ty.hates : g.hates };
+  };
+  for (const f of gives(b)) for (const x of here) {
+    if (!x.has.includes(f)) continue;
+    const t = tastes(x);
+    if (t.cares.includes(f)) { love += x.people; icons.add(f); }
+    if (t.hates.includes(f)) { hate += x.people; icons.add(f); }
+  }
+  if (breaksQuiet(b)) for (const x of here) {
+    if (x.has.includes("quiet")) continue;
+    const t = tastes(x);
+    if (t.cares.includes("quiet")) { hate += x.people; icons.add("quiet"); }
+    if (t.hates.includes("quiet")) { love += x.people; icons.add("quiet"); }
+  }
+  if (!love && !hate) return { from: src, to: home, tone: "none", html: `<span class="lk none">no effect</span>`, tip: `The ${KIND_NAME[b.kind].toLowerCase()} next door doesn't change how these cats feel` };
+  const tone: Link["tone"] = love && hate ? "mixed" : love ? "good" : "bad";
+  const name = KIND_NAME[b.kind].toLowerCase();
+  const tip = [love ? `${love} cats here like the ${name} next door` : "", hate ? `${hate} dislike it` : ""].filter(Boolean).join(", ");
+  const html = `<span class="lk ${tone}">${[...icons].map((f) => FACTOR_ICON[f] ?? "").join("")}${love ? `<b class="plus">+${love}</b>` : ""}${hate ? `<b class="minus">−${hate}</b>` : ""}</span>`;
+  return { from: src, to: home, tone, html, tip };
+}
+
+/** Commuters from Lean's trips: home → workplace. */
+function commuteLinks(i: number): LinkInfo[] {
+  const r = shownReply();
+  const by = new Map<string, number>();
+  for (const t of r?.report.trips ?? []) {
+    if (t.fromBlock === null || t.toBlock === null || t.fromBlock === undefined || t.toBlock === undefined || t.fromBlock === t.toBlock) continue;
+    if (t.fromBlock !== i && t.toBlock !== i) continue;
+    if (st.build[t.toBlock]?.kind !== "office") continue;
+    const k = `${t.fromBlock}>${t.toBlock}`;
+    by.set(k, (by.get(k) ?? 0) + t.people);
+  }
+  return [...by.entries()].map(([k, n]) => {
+    const [a, b] = k.split(">").map(Number);
+    return { from: a, to: b, tone: "work" as const, html: `<span class="lk work">${ICON.work()}<b>${n}</b></span>`, tip: `${n} cats commute from here to work${b === i ? " here" : ""}` };
+  });
+}
+
+/**
+ * How block `src` changes block `dst`'s value, from Lean: `blocks[src].neighbors` holds, for each
+ * neighbor, its value with `src` empty minus its value now, so the effect of `src` is −change.
+ */
+function pointsEffect(src: number, dst: number): number | null {
+  const br = shownReply()?.report.blocks?.find((b) => b.block === src);
+  const n = br?.neighbors?.find((x) => x.block === dst);
+  return n ? -n.change : null;
+}
+
+function showLinks(t: Target | null) {
+  links = [];
+  if (t?.kind === "block" && st.pr) {
+    const i = t.i, b = st.build[i];
+    const blocks = shownReply()?.report.blocks;
+    if (b && b.kind !== "empty" && blocks?.some((x) => x.neighbors)) {
+      // Lean's own numbers: what each built neighbor does to this block's value, in points
+      const nb = blocks.find((x) => x.block === i)?.neighbors?.map((x) => x.block) ?? world.linkedNeighbors(i);
+      for (const j of nb) {
+        if (st.build[j]?.kind === "empty") continue;
+        const pts = pointsEffect(j, i);
+        if (pts === null) continue;
+        const cats = b.kind === "housing" ? effectOn(i, j) : null;
+        const tone: Link["tone"] = pts > 0 ? "good" : pts < 0 ? "bad" : "none";
+        const name = KIND_NAME[st.build[j].kind].toLowerCase();
+        const catNote = cats && cats.tone !== "none" ? ` <small class="lk-cats">${cats.html.replace(/<\/?span[^>]*>/g, "")}</small>` : "";
+        const html = pts === 0 ? `<span class="lk none">no effect</span>` : `<span class="lk ${tone}"><b class="${pts > 0 ? "plus" : "minus"}">${pts > 0 ? "+" : "−"}${Math.abs(pts)}</b>${catNote}</span>`;
+        const tip = pts === 0 ? `The ${name} next door doesn't change this block's score` : `The ${name} next door ${pts > 0 ? "adds" : "takes away"} ${Math.abs(pts)} points here (Lean: this block's value with that one empty)${cats && cats.tip ? `. ${cats.tip}` : ""}`;
+        links.push({ from: j, to: i, tone, html, tip });
+      }
+      links.push(...commuteLinks(i));
+    } else if (b && b.kind !== "empty") {
+      const nb = world.linkedNeighbors(i);
+      if (b.kind === "housing") for (const j of nb) { if (st.build[j]?.kind === "empty") continue; const l = effectOn(i, j); if (l) links.push(l); }
+      else for (const j of nb) if (st.build[j]?.kind === "housing") { const l = effectOn(j, i); if (l) links.push(l); }
+      links.push(...commuteLinks(i));
+    }
+  }
+  world.setLinks(links.length ? links.map((l) => ({ from: l.from, to: l.to, tone: l.tone })) : null);
+  setHTML("links", links.map((l, k) => `<div class="badge" data-k="${k}" data-tip="${esc(l.tip)}">${l.html}</div>`).join(""));
+}
+
+function placeLinks() {
+  document.querySelectorAll<HTMLElement>("#links .badge").forEach((el) => {
+    const l = links[Number(el.dataset.k)];
+    // commute labels sit nearer the home end, so they never sit on top of a neighbor label on the same arc
+    const p = l ? world.linkLabelAt(l.from, l.to, l.tone === "work" ? 0.28 : 0.5) : null;
+    if (!p) { el.style.display = "none"; return; }
+    el.style.display = "";
+    el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px) translate(-50%, -50%)`;
+  });
+}
+
+// ---------- the day clock (Lean's simulated day) ----------
+
+const PHASE_NAME = ["Morning commute", "Lunch", "Evening out", "Home for the night"];
+let clockPhase = -1;
+function tickClock() {
+  const c = world.transit?.dayClock() ?? null;
+  const el = $("dayclock");
+  if (!c || document.body.classList.contains("titling")) { if (!el.classList.contains("hidden")) el.classList.add("hidden"); clockPhase = -1; return; }
+  el.classList.remove("hidden");
+  if (c.phase !== clockPhase) {
+    clockPhase = c.phase;
+    el.innerHTML = `<span class="dc-ic">${c.phase >= 2 ? ICON.moon() : ICON.sun()}</span><span class="dc-name">${PHASE_NAME[c.phase]}</span>
+      <span class="dc-steps">${PHASE_NAME.map((_n, k) => `<i class="${k < c.phase ? "done" : k === c.phase ? "now" : ""}"><s></s></i>`).join("")}</span>`;
+    el.dataset.tip = "The day Lean simulated for this town: every cat you see follows it";
+  }
+  const now = el.querySelector<HTMLElement>(".dc-steps i.now s");
+  if (now) now.style.width = `${Math.round(c.u * 100)}%`;
+}
+void Transit;
 
 // ---------- coach marks, tooltip, toast ----------
 
@@ -955,9 +1360,11 @@ function toast(msg: string) {
 
 // ---------- events ----------
 
-world.onClick = (t, button) => {
+world.onClick = (t0, button) => {
   if (!st.pr) return;
-  if (!t) return;
+  if (!t0) return;
+  // with a building picked, a click on a faint station entrance builds on its block instead
+  const t: Target = t0.kind === "site" && st.tool && st.tool !== "subway" && st.tool !== "bridge" ? { kind: "block", i: t0.i } : t0;
   if (t.kind === "bridge" && button === 0) toggleBridge(t.i);
   if (t.kind === "block" && st.tool === "bridge") return;
   if (t.kind === "block") editBlock(t.i, button === 0, true);
@@ -965,26 +1372,42 @@ world.onClick = (t, button) => {
   else if (t.kind === "site" && button === 0) setStation(shownSolution().station === t.i ? null : t.i);
   if (cardTarget) renderCard(cardTarget);
 };
-world.onHover = (t) => showCard(t);
+world.onHover = (t) => { showCard(t); showLinks(t); };
 // double-click focuses a block, unless it's one you're editing (clicks there build/raise)
 world.onDouble = (t) => {
   if (t?.kind !== "block") { world.recenter(); return; }
   if (!canEdit() || st.pr!.puzzle.fixed[t.i]) world.focusSmooth(t.i);
 };
-world.onFrame = () => { placeCard(); placeBadges(); };
+let lastMeterH = 0;
+function layoutRight() {
+  const h = $("meter").offsetHeight;
+  if (h === lastMeterH) return;
+  lastMeterH = h;
+  document.documentElement.style.setProperty("--lens-top", `${18 + h + 8}px`);
+  document.documentElement.style.setProperty("--pc-top", `${18 + h + 8 + 52 + 8}px`);
+}
+world.onFrame = () => { layoutRight(); placeCard(); placeBadges(); placeLinks(); tickClock(); };
 window.addEventListener("pointermove", (e) => { mouse = { x: e.clientX, y: e.clientY }; });
 $("card").addEventListener("pointerenter", () => clearTimeout(hideTimer));
 $("card").addEventListener("pointerleave", () => { hideTimer = window.setTimeout(hideCard, 200); });
 
 document.addEventListener("click", (e) => {
-  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens],[data-size]");
+  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens],[data-size],[data-pick]");
   if (!t) return;
+  if (t.dataset.pick) { void playNew(t.dataset.pick as Size); return; }
+  switch (t.dataset.act) {
+    case "start": showScreen("size"); return;
+    case "rules": showScreen("rules"); return;
+    case "home": showScreen("home"); return;
+    case "go": hideIntro(); return;
+    case "title": location.href = urlWith({ seed: null, size: null }); return;
+    case "new": void playNew(pickSize); return;
+  }
   if (t.dataset.size) { pickSize = t.dataset.size as Size; lastHTML.delete("town"); renderTown(); return; }
   if (t.dataset.lens) { lens = t.dataset.lens as Lens; updateLens(); if (cardTarget) renderCard(cardTarget); }
   else if (t.dataset.tool) pickTool(t.dataset.tool as Tool);
   else if (t.dataset.route) toggleRoute(Number(t.dataset.route));
   else switch (t.dataset.act) {
-    case "new": location.search = `?seed=${Math.floor(Math.random() * 100000)}&size=${pickSize}`; break;
     case "keep": keepBuilding(); break;
     case "recenter": world.recenter(); break;
     case "close-pc": st.postcardOpen = false; render(); break;
@@ -1014,9 +1437,14 @@ if (new URLSearchParams(location.search).has("test")) {
     blocked: () => (st.pr?.puzzle.routes ?? []).map((_r, i) => !!world.transit?.routeBlocked(i)),
     lookBridge: (i: number, d: number, e: number) => { const p = world.bridgeMid(i); if (p) world.lookAt(p, d, e); },
     dbgRiver: () => { const tr = world.transit as unknown as { stream: Set<number>; bridged: Set<number>; routeNodes: number[][]; segIndex: Map<string, number> }; return { stream: [...tr.stream], bridged: [...tr.bridged], sites: st.pr!.puzzle.bridgeSites, routes: tr.routeNodes, bridges: st.bridges }; },
-    setAllBridges: (on: boolean) => { st.bridges = st.bridges.map(() => on); world.setBridges(st.bridges); render(); },
+    setAllBridges: (on: boolean) => { st.bridges = st.bridges.map(() => on); world.setBridges(st.bridges); render(); void refreshLive(); },
     bridgeSites: () => (st.pr?.puzzle.bridgeSites ?? []).map((_s, i) => ({ i, p: world.screenOf({ kind: "bridge", i }) })),
     lookBlock: (i: number, d: number, e: number) => world.lookAt(world.centerOf(i), d, e),
+    far: () => world.titleView(),
+    zoom: (k: number) => world.cam.set(world.cam.goal.target, world.cam.goal.dist * k, world.cam.goal.az, world.cam.goal.polar),
+    recenter: () => world.recenter(),
+    setAll: (kind: Kind, stories: number) => { st.build = st.build.map(() => ({ kind, stories })); world.setBuild(st.build, st.station); void refreshLive(); },
+    day: () => world.transit?.dayClock() ?? null,
     bridgeWalk: (i: number) => world.bridgeWalk(i),
     busOnBridge: () => !!world.transit?.busOnBridge(),
     demoWalk: (i: number) => world.transit?.demoWalk([world.edgePath(i)]),
@@ -1025,5 +1453,4 @@ if (new URLSearchParams(location.search).has("test")) {
     blocks: () => st.build.map((_b, i) => ({ i, fixed: !!st.pr?.puzzle.fixed[i], kind: st.build[i].kind, p: world.screenOf({ kind: "block", i }) })),
   };
 }
-coach();
-void start();
+void boot();

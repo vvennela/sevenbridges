@@ -12,6 +12,8 @@ import { Rng, hashStr } from "./rng";
 import { Transit } from "./transit";
 import { RIVER_HALF, bridgeMesh, buildRiver, type BridgeView } from "./river";
 import type { Building, PuzzleReply } from "./types";
+import { Metro } from "./metro";
+import { Air, linkArcs, trafficWash, arcTop, type Link } from "./overlays";
 
 const ROAD_W = 0.62;
 
@@ -162,7 +164,22 @@ export class World {
 
   // ---------- loading ----------
 
+  /** Everything that belongs to the current town (cleared when a new town loads). */
+  private level = new THREE.Group();
+
+  /** Remove the current town (a new level is about to load). */
+  private clear() {
+    this.scene.remove(this.level);
+    this.level.traverse((o) => { if (o instanceof THREE.Mesh || o instanceof THREE.InstancedMesh) o.geometry.dispose(); });
+    this.level = new THREE.Group();
+    this.scene.add(this.level);
+    this.blocks = []; this.anims = []; this.bridges = []; this.bridgeOn = []; this.spots = new Map(); this.segOwners = new Map();
+    this.links = null; this.transit = null; this.hovered = null; this.glowOn = new Set();
+    this.metro = null; this.air = null; this.wash = null; this.linkGroup = null;
+  }
+
   load(pr: PuzzleReply) {
+    this.clear();
     const pz = pr.puzzle;
     this.seed = hashStr(pz.name + ":" + pz.map.points.map((p) => `${p.x},${p.y}`).join(";"));
     const forced = new URLSearchParams(location.search).get("setting");
@@ -175,12 +192,20 @@ export class World {
     this.mapCenter = c;
     this.radius = Math.max(...pts.map((p) => dist(p, c)));
 
+    // the metro to downtown: from Lean's entry point when given, else behind the town as first seen
+    const me = pz.metroEntry && (pz.metroEntry.x !== 0 || pz.metroEntry.y !== 0) ? pz.metroEntry : undefined;
+    const mf = me ?? pz.metro?.from;
+    const jitter = ((this.seed >>> 8) % 1000) / 1000 - 0.5;
+    const mdir = mf ? norm(sub(v2(mf.x * MAP_SCALE, mf.y * MAP_SCALE), c)) : v2(-Math.sin(0.49 + jitter * 0.9), Math.cos(0.49 + jitter * 0.9));
+    this.metroDir = mdir;
     this.ground(c);
     const wet = this.water(c);
     this.verge(outer, c);
     const riverSegs = pz.map.segments.map((s, i) => (s.terrain === "stream" ? i : -1)).filter((i) => i >= 0);
+    this.riverSegs = new Set(riverSegs);
+    this.segPts = pz.map.segments.map((s) => [pts[s.a], pts[s.b]] as [V2, V2]);
     this.roads(pts, pz.map.segments.filter((s) => s.terrain !== "stream"));
-    if (riverSegs.length) buildRiver(this.scene, pts, pz.map.segments, riverSegs, new Set(outerLoop(pz.map.blocks.map((b) => b.corners))), c, this.seed);
+    if (riverSegs.length) buildRiver(this.level as unknown as THREE.Scene, pts, pz.map.segments, riverSegs, new Set(outerLoop(pz.map.blocks.map((b) => b.corners))), c, this.seed);
     this.bridges = (pz.bridgeSites ?? []).map((seg, site) => {
       const s = pz.map.segments[seg];
       const a = pts[s.a], b = pts[s.b];
@@ -190,10 +215,12 @@ export class World {
       hit.position.set((a.x + b.x) / 2, 0.15, -(a.y + b.y) / 2);
       hit.scale.set(1, 1, 1);
       hit.userData.bridge = site;
-      this.scene.add(ghost, real, hit);
+      this.level.add(ghost, real, hit);
       return { site, seg, a, b, ghost, real, hit };
     });
-    this.surroundings(c, outer, wet);
+    this.metro = new Metro(this.level, c, this.radius, mdir, outer, this.seed);
+    this.air = new Air(this.level);
+    this.surroundings(c, outer, (p) => wet(p) || !!this.metro?.near(p, 1.4) || this.downtownArea(p, c));
 
     const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
     const owners = new Map<string, number[]>();
@@ -209,7 +236,7 @@ export class World {
       const b = this.blocks[s];
       if (b) spots.set(s, this.stationSpot(b));
     }
-    this.transit = new Transit(this.scene, pts, pz.map.segments, pz.map.blocks.map((b) => b.corners),
+    this.transit = new Transit(this.level as unknown as THREE.Scene, pts, pz.map.segments, pz.map.blocks.map((b) => b.corners),
       this.blocks.map((b) => b.center), outer, pz.routes, spots, this.seed);
     this.transit.groundAt = (p) => this.groundAt(p);
     this.spots = spots;
@@ -217,7 +244,8 @@ export class World {
     const t = new THREE.Vector3(c.x, 0, -c.y);
     this.controls.target.copy(t);
     const d = this.radius * 4.3;
-    const el = THREE.MathUtils.degToRad(42), az = THREE.MathUtils.degToRad(28);
+    // the camera looks toward downtown, so the skyline sits behind the town
+    const el = THREE.MathUtils.degToRad(42), az = Math.atan2(-mdir.x, mdir.y) + 0.12;
     this.camera.position.set(t.x + d * Math.cos(el) * Math.sin(az), d * Math.sin(el), t.z + d * Math.cos(el) * Math.cos(az));
     this.cam.minDist = this.radius * 0.55;
     this.cam.maxDist = this.radius * 6.5;
@@ -231,6 +259,66 @@ export class World {
     this.sun.target.position.copy(t);
     this.sun.shadow.camera.updateProjectionMatrix();
   }
+
+  private metroDir: V2 = v2(0, 1);
+  metro: Metro | null = null;
+  private air: Air | null = null;
+  private wash: THREE.Mesh | null = null;
+  private linkGroup: THREE.Group | null = null;
+  /** Slow turntable spin (title screen), radians per second; 0 = off. */
+  orbit = 0;
+
+  /** The open country around downtown (no trees or cottages there). */
+  private downtownArea(p: V2, c: V2): boolean {
+    const q = sub(p, c);
+    const along = q.x * this.metroDir.x + q.y * this.metroDir.y;
+    const across = Math.abs(-q.x * this.metroDir.y + q.y * this.metroDir.x);
+    return along > this.radius + 12 && across < 6 + (along - this.radius) * 0.75;
+  }
+
+  /** Pollution haze (0..1 per block) and fresh air over the given blocks. */
+  setAir(level: (number | null)[] | null, fresh: number[]) {
+    this.air?.set(this.blocks.map((b) => b.center), level ?? [], level ? fresh : [], (i) => {
+      const b = this.blocks[i];
+      return b ? Math.min(...b.tilePoly.map((q) => dist(q, b.center))) : 1;
+    });
+  }
+
+  /** Busy streets: 0..1 per map segment (null clears). */
+  setTraffic(level: number[] | null) {
+    if (this.wash) { this.level.remove(this.wash); this.wash.geometry.dispose(); this.wash = null; }
+    if (!level || !this.segPts.length) return;
+    this.wash = trafficWash(this.segPts, level, ROAD_W * 0.8);
+    if (this.wash) this.level.add(this.wash);
+  }
+  private segPts: [V2, V2][] = [];
+
+  /** Arcs from a hovered block to the blocks that affect it (null clears). */
+  setLinks(links: { from: number; to: number; tone: Link["tone"] }[] | null) {
+    if (this.linkGroup) { this.level.remove(this.linkGroup); this.linkGroup.traverse((o) => { if (o instanceof THREE.Mesh) o.geometry.dispose(); }); this.linkGroup = null; }
+    if (!links?.length) return;
+    this.linkGroup = linkArcs(links.map((l) => ({ from: this.centerOf(l.from), to: this.centerOf(l.to), tone: l.tone })));
+    this.level.add(this.linkGroup);
+  }
+  /** Screen spot for a link's label (the top of its arc). */
+  linkLabelAt(from: number, to: number, along = 0.5): { x: number; y: number } | null {
+    const t = arcTop(this.centerOf(from), this.centerOf(to), along);
+    return this.project(t.p, t.h);
+  }
+
+  /** Neighbors as Lean counts them: blocks sharing a street, across the river only over a built bridge. */
+  linkedNeighbors(i: number): number[] {
+    const out = new Set<number>();
+    for (const [seg, os] of this.segOwners) {
+      if (os.length !== 2 || !os.includes(i)) continue;
+      const j = os[0] === i ? os[1] : os[0];
+      const site = this.bridges.find((b) => b.seg === seg);
+      if (this.riverSegs.has(seg) && !(site && this.bridgeOn[site.site])) continue;
+      out.add(j);
+    }
+    return [...out];
+  }
+  private riverSegs = new Set<number>();
 
   private spots = new Map<number, V2>();
   private bridges: BridgeView[] = [];
@@ -265,7 +353,7 @@ export class World {
     const center = centroid(tilePoly);
     const root = new THREE.Group();
     root.userData.block = i;
-    this.scene.add(root);
+    this.level.add(root);
 
     // soft raised plot: a curb, then the plot top
     const curb = extrude(tilePoly, 0, TILE_TOP - 0.02, 0.05, col(C.curb));
@@ -284,14 +372,13 @@ export class World {
     tint.renderOrder = 3;
     root.add(tint);
 
-    const rb = new GB();
-    const inner = inset(tilePoly, 0.16);
-    const y = TILE_TOP + 0.01;
-    for (let k = 0; k < tilePoly.length; k++) {
-      const k2 = (k + 1) % tilePoly.length;
-      rb.quad(w3(tilePoly[k], y), w3(tilePoly[k2], y), w3(inner[k2], y), w3(inner[k], y), col("#ffffff"), [0, 1, 0]);
-    }
-    const ring = new THREE.Mesh(rb.build(), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false }));
+    // the hover ring: the plot outline with the inner part cut out (vertex counts may differ)
+    const ringShape = new THREE.Shape(tilePoly.map((p) => new THREE.Vector2(p.x, p.y)));
+    ringShape.holes.push(new THREE.Path(inset(tilePoly, 0.16).map((p) => new THREE.Vector2(p.x, p.y))));
+    const ringGeo = new THREE.ShapeGeometry(ringShape);
+    ringGeo.rotateX(-Math.PI / 2);
+    ringGeo.translate(0, TILE_TOP + 0.01, 0);
+    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide }));
     ring.visible = false;
     root.add(ring);
 
@@ -304,7 +391,7 @@ export class World {
     g.rotateX(-Math.PI / 2);
     g.position.set(c.x, -0.02, -c.y);
     g.receiveShadow = true;
-    this.scene.add(g);
+    this.level.add(g);
   }
 
   /** A slightly deeper green verge hugging the ring road. */
@@ -321,14 +408,15 @@ export class World {
     g.translate(0, -0.01, 0);
     const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: col(C.meadowDeep), roughness: 1 }));
     m.receiveShadow = true;
-    this.scene.add(m);
+    this.level.add(m);
   }
 
   /** Cosmetic water on one side: a river or a coast (or nothing). Returns a "wet" test. */
   private water(c: V2): (p: V2) => boolean {
     if (this.setting === "inland") return () => false;
     const rng = new Rng(this.seed ^ 0x5e7);
-    const a = rng.range(0, Math.PI * 2);
+    // water lies on the side away from downtown
+    const a = Math.atan2(-this.metroDir.y, -this.metroDir.x) + rng.range(-0.6, 0.6);
     const u = v2(Math.cos(a), Math.sin(a)), w = v2(-u.y, u.x);
     const ph = rng.range(0, 6);
     const near = (t: number) => this.radius + 3.2 + 0.9 * Math.sin(t * 0.09 + ph) + 0.4 * Math.sin(t * 0.23 + ph * 2);
@@ -343,7 +431,7 @@ export class World {
       g.translate(0, y, 0);
       const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: col(color), roughness: 0.35, metalness: 0.0 }));
       m.receiveShadow = true;
-      this.scene.add(m);
+      this.level.add(m);
     };
     band(0.8, -0.012, C.sand);
     band(0.15, -0.008, C.shallows);
@@ -371,7 +459,7 @@ export class World {
     }
     const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
     mesh.receiveShadow = true;
-    this.scene.add(mesh);
+    this.level.add(mesh);
   }
 
   /** The edge of town. `?bg=meadow` (default): rolling meadow with soft tree lines and a lane
@@ -426,7 +514,7 @@ export class World {
       }
       const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
       mesh.receiveShadow = true;
-      this.scene.add(mesh);
+      this.level.add(mesh);
     }
     const nearLane = (p: V2, d: number) => lanes.some((l) => l.some((q) => dist(q, p) < d));
 
@@ -485,7 +573,7 @@ export class World {
     for (const [m, shadow] of [[near, true], [far, false]] as const) {
       const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
       mesh.castShadow = shadow; mesh.receiveShadow = true;
-      this.scene.add(mesh);
+      this.level.add(mesh);
     }
   }
 
@@ -503,7 +591,7 @@ export class World {
       if (key !== v.shown) {
         for (const p of v.pieces) { v.root.remove(p.obj); disposeTree(p.obj); }
         v.spots = { benches: [], strolls: [] };
-        v.pieces = makeBuilding(b, { poly: v.tilePoly, center: v.center, rng: new Rng(this.seed ^ hashStr(`b${i}:${b.kind}`)), keepClear: this.spots.get(i), fixed: v.fixed, spots: v.spots });
+        v.pieces = makeBuilding(b, { poly: v.tilePoly, center: v.center, rng: new Rng(this.seed ^ hashStr(`b${i}:${b.kind}`)), keepClear: this.spots.get(i), fixed: v.fixed, spots: v.spots, index: i, townSalt: this.seed % 7 });
         for (const p of v.pieces) { p.obj.userData.block = i; v.root.add(p.obj); }
         v.shown = key;
         v.building = b;
@@ -521,6 +609,7 @@ export class World {
       if (v.badge) v.badge.position.y = buildingHeight(b) + 0.5;
     });
     this.transit?.setStation(station);
+    this.metro?.setStation(station !== null ? this.spots.get(station) ?? this.blocks[station]?.center ?? null : null);
   }
 
   /** Hearts over happy homes, small gray clouds over unhappy ones (from Lean's residents). */
@@ -556,13 +645,13 @@ export class World {
     const dx = (Math.random() - 0.5) * 0.8, dz = (Math.random() - 0.5) * 0.8;
     s.position.set(v.center.x + dx, base, -v.center.y + dz);
     s.scale.setScalar(0.001);
-    this.scene.add(s);
+    this.level.add(s);
     this.anim(s, start, 1.6, (o, u) => {
       const sp = o as THREE.Sprite;
       sp.position.y = base + u * 1.3;
       sp.scale.setScalar(0.42 * size * Math.min(1, u * 4));
       sp.material.opacity = 1 - u * u;
-    }, () => { this.scene.remove(s); s.material.dispose(); });
+    }, () => { this.level.remove(s); s.material.dispose(); });
   }
 
   /** Debug: a path from the road up onto a block's outer sidewalk and along it (for clip checks). */
@@ -618,6 +707,15 @@ export class World {
     if (!v) return;
     this.cam.loose = false;
     this.cam.set(new THREE.Vector3(v.center.x, 0, -v.center.y), this.radius * 1.5, this.cam.goal.az, this.cam.goal.polar);
+  }
+
+  /** Where downtown is, from the town's center (the metro comes from there). */
+  get downtown(): V2 { return this.metroDir; }
+
+  /** Title screen: a lower, wider view, so the skyline shows behind the town. */
+  titleView() {
+    this.cam.loose = true;
+    this.cam.set(this.home.target, this.radius * 3.6, this.home.az, THREE.MathUtils.degToRad(66), true);
   }
 
   /** Back to the starting view of the whole town. */
@@ -696,7 +794,7 @@ export class World {
 
   /** Lens links: a dotted arc between the two blocks joined by each built bridge. */
   setBridgeLinks(show: boolean) {
-    if (this.links) { this.scene.remove(this.links); this.links = null; }
+    if (this.links) { this.level.remove(this.links); this.links = null; }
     if (!show) return;
     const g = new THREE.Group();
     const m = new GB();
@@ -717,7 +815,7 @@ export class World {
     const mesh = new THREE.Mesh(m.build(), new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, depthTest: false, transparent: true }));
     mesh.renderOrder = 12;
     g.add(mesh);
-    this.scene.add(g);
+    this.level.add(g);
     this.links = g;
   }
 
@@ -814,6 +912,9 @@ export class World {
       this.transit.setDetail(this.camera.position.distanceTo(this.controls.target), this.radius);
     }
     this.transit?.update(t);
+    this.metro?.update(t);
+    this.air?.update(t, this.camera.position);
+    if (this.orbit) { this.cam.goal.az += this.orbit * this.frameDt; this.cam.cur.az += this.orbit * this.frameDt; }
     this.cam.update(this.frameDt);
     this.controls.target.copy(this.cam.cur.target);
     this.onFrame();

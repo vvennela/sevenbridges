@@ -12,6 +12,9 @@
       <section id="meter" class="meter"></section>
       <div id="lenses" class="lenses"></div>
       <div id="badges" class="badges"></div>
+      <div id="links" class="badges"></div>
+      <div id="dayclock" class="dayclock hidden"></div>
+      <div id="intro" class="intro hidden"></div>
       <nav id="tray" class="tray">
         <div id="tools" class="tools"></div>
         <div class="tray-gap"></div>
@@ -25,6 +28,45 @@
       <div id="loading" class="loading">
         <div class="loading-house"></div>
         <div id="loading-text">Setting up the neighborhood…</div>
+      </div>
+      <div id="title" class="title hidden">
+        <div class="title-card" data-screen="home">
+          <div class="title-mark" aria-hidden="true"></div>
+          <h1 class="title-logo">Seven Bridges</h1>
+          <p class="title-tag">Plan a cozy town for its cats. Lean proves the best plan.</p>
+          <div class="title-btns">
+            <button class="tbtn primary" data-act="start">Start</button>
+            <button class="tbtn" data-act="rules">The rules</button>
+          </div>
+        </div>
+        <div class="title-card rules" data-screen="rules">
+          <h2>The rules</h2>
+          <ul class="rule-list">
+            <li><span class="rule-ic" data-ic="build"></span>Build on every block: homes, offices, shops, food, parks, bars.</li>
+            <li><span class="rule-ic" data-ic="heart"></span>Neighbors matter: what's next door decides how happy and how productive each block is.</li>
+            <li><span class="rule-ic" data-ic="bus"></span>Connect the town: roads, bridges, buses, a metro to downtown. Cars work too, but bring traffic and pollution.</li>
+            <li><span class="rule-ic" data-ic="coin"></span>Stay within budget.</li>
+            <li><span class="rule-ic" data-ic="star"></span>Your rating is out of 100. 100 is the best possible plan, proven by Lean for this town's cats.</li>
+          </ul>
+          <div class="title-btns">
+            <button class="tbtn primary" data-act="start">Start</button>
+            <button class="tbtn" data-act="home">Back</button>
+          </div>
+        </div>
+        <div class="title-card" data-screen="size">
+          <h2>Pick a town size</h2>
+          <div class="sizes-big">
+            <button class="size-card" data-pick="easy"><span class="size-blocks" data-n="5"></span><b>Easy</b><small>5 blocks</small></button>
+            <button class="size-card" data-pick="medium"><span class="size-blocks" data-n="7"></span><b>Medium</b><small>7 blocks</small></button>
+            <button class="size-card" data-pick="hard"><span class="size-blocks" data-n="8"></span><b>Hard</b><small>8 blocks</small></button>
+          </div>
+          <div class="title-btns"><button class="tbtn" data-act="home">Back</button></div>
+        </div>
+        <div class="title-card" data-screen="wait">
+          <div class="loading-house"></div>
+          <h2 id="wait-text">Generating your town and proving its best plan…</h2>
+          <p class="title-tag" id="wait-sub">Lean finds the best plan first, so it can rate yours out of 100.</p>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -46,8 +46,44 @@ export function centroid(p: V2[]): V2 {
   return v2(cx / (6 * a), cy / (6 * a));
 }
 
+/** Is a CCW polygon convex (allowing nearly straight corners)? */
+function isConvex(p: V2[]): boolean {
+  const n = p.length;
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[(i + 1) % n], c = p[(i + 2) % n];
+    const u = norm(sub(b, a)), w = norm(sub(c, b));
+    // nearly straight corners (curving streets) still count as convex; clipping only trims a sliver
+    if (u.x * w.y - u.y * w.x < -0.12) return false;
+  }
+  return true;
+}
+
+/** Inset a convex CCW polygon by clipping it with each edge moved inward by ds[i].
+ * Unlike mitred offsets, short edges simply vanish instead of folding over. */
+function clipInset(p: V2[], ds: number[]): V2[] {
+  let poly = p.slice();
+  const n = p.length;
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[(i + 1) % n];
+    const e = norm(sub(b, a)), nin = v2(-e.y, e.x);
+    const o = add(a, mul(nin, ds[i]));
+    const side = (q: V2) => (q.x - o.x) * nin.x + (q.y - o.y) * nin.y;
+    const out: V2[] = [];
+    for (let k = 0; k < poly.length; k++) {
+      const P = poly[k], Q = poly[(k + 1) % poly.length];
+      const sp = side(P), sq = side(Q);
+      if (sp >= 0) out.push(P);
+      if ((sp >= 0) !== (sq >= 0)) out.push(add(P, mul(sub(Q, P), sp / (sp - sq))));
+    }
+    poly = out;
+    if (poly.length < 3) return p.map(() => centroid(p));
+  }
+  return poly;
+}
+
 /** Move every edge of a CCW polygon inward by d (mitred corners, clamped). */
 export function inset(p: V2[], d: number): V2[] {
+  if (p.length > 3 && isConvex(p)) return clipInset(p, p.map(() => d));
   const n = p.length;
   return p.map((cur, i) => {
     const prev = p[(i - 1 + n) % n], next = p[(i + 1) % n];
@@ -61,6 +97,7 @@ export function inset(p: V2[], d: number): V2[] {
 
 /** Move each edge of a CCW polygon inward by its own distance ds[i] (edge i = p[i]→p[i+1]). */
 export function insetEdges(p: V2[], ds: number[]): V2[] {
+  if (p.length > 3 && isConvex(p)) return clipInset(p, ds);
   const n = p.length;
   return p.map((cur, i) => {
     const pi = (i - 1 + n) % n;
@@ -75,7 +112,7 @@ export function insetEdges(p: V2[], ds: number[]): V2[] {
     const s = ((a2.x - a1.x) * e2.y - (a2.y - a1.y) * e2.x) / den;
     const q = add(a1, mul(e1, s));
     // clamp very sharp corners
-    return dist(q, cur) > 3 * Math.max(d1, d2) ? add(cur, mul(norm(add(n1, n2)), Math.max(d1, d2))) : q;
+    return dist(q, cur) > 1.6 * Math.max(d1, d2) ? add(cur, mul(norm(add(n1, n2)), Math.max(d1, d2))) : q;
   });
 }
 

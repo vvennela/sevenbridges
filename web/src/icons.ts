@@ -17,6 +17,14 @@ export const ICON = {
   wish: () => svg(`<circle cx="12" cy="12" r="9" fill="#EEF3FF"/><path d="M12 6.5l1.5 3.4 3.7.4-2.8 2.5.8 3.6L12 14.6l-3.2 1.8.8-3.6L6.8 10.3l3.7-.4z" fill="#9CCAF4"/>`),
   oops: () => svg(`<circle cx="12" cy="12" r="9" fill="#FFE9E5"/><path d="M12 7v6" stroke="#E2675A" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.6" r="1.4" fill="#E2675A"/>`),
   bridge: () => svg(`<path d="M2 15h20v3H2z" fill="#C9A27E"/><path d="M3 15c3-6 15-6 18 0" fill="none" stroke="#D9CDB8" stroke-width="3"/><path d="M2 20c3 1 5-1 7 0s5 1 7 0 4-1 6 0" stroke="#8FD3EA" stroke-width="1.8" fill="none"/>`),
+  check: () => svg(`<circle cx="12" cy="12" r="9" fill="#5FBF6A"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`),
+  home: () => svg(`<path d="M4 11.2 12 4.5l8 6.7" fill="none" stroke="${C.ink}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 10v9h11v-9" fill="#FFE19A" stroke="${C.ink}" stroke-width="1.6" stroke-linejoin="round"/><rect x="10.5" y="14" width="3" height="5" fill="${C.coral}"/>`),
+  sun: () => svg(`<circle cx="12" cy="12" r="4.6" fill="#FFC83D"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="#FFC83D" stroke-width="1.8" stroke-linecap="round"/>`),
+  moon: () => svg(`<path d="M15.5 3.5a8.5 8.5 0 1 0 5 14.6A7 7 0 0 1 15.5 3.5z" fill="#B8C4F0"/>`),
+  /** Productivity: a little factory-and-coin mark. */
+  work: () => svg(`<rect x="3.5" y="7.5" width="17" height="11.5" rx="2.5" fill="${C.sky}"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5" fill="none" stroke="#4F7FD0" stroke-width="1.6"/><rect x="3.5" y="11.5" width="17" height="1.6" fill="#4F7FD0" opacity=".45"/><circle cx="12" cy="12.3" r="1.6" fill="#fff"/>`),
+  food: () => svg(`<path d="M5 10h12v4a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5z" fill="${C.peach}" stroke="#D9784F" stroke-width="1.3"/><path d="M17 11.5h1.5a2 2 0 0 1 0 4H16.5" fill="none" stroke="#D9784F" stroke-width="1.3"/>`),
+  car: (color = C.coral) => svg(`<path d="M3.5 14.5l1.8-4.6A2 2 0 0 1 7.2 8.6h9.6a2 2 0 0 1 1.9 1.3l1.8 4.6v3H3.5z" fill="${color}"/><path d="M7 10.3h10l1.1 3H5.9z" fill="#fff" opacity=".85"/><circle cx="7.5" cy="17.6" r="1.9" fill="${C.ink}"/><circle cx="16.5" cy="17.6" r="1.9" fill="${C.ink}"/>`),
   briefcase: () => svg(`<rect x="3.5" y="7.5" width="17" height="11.5" rx="2.5" fill="#C9A27E"/><path d="M9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5" fill="none" stroke="#8C6A4C" stroke-width="1.6"/><rect x="3.5" y="11.5" width="17" height="1.6" fill="#8C6A4C" opacity=".5"/>`),
   cloud: () => svg(`<path d="M7 17a4 4 0 0 1-.6-7.95A5 5 0 0 1 16 8.6 3.7 3.7 0 1 1 17.2 17z" fill="#A9B2C6"/>`),
   /** A round cat face in a group color (the residents are cats). */
@@ -33,5 +41,8 @@ export const FACTOR_ICON: Record<string, string> = {
   shortCommute: svg(`<circle cx="12" cy="12" r="8.5" fill="#fff" stroke="${C.ink}" stroke-width="1.6"/><path d="M12 7.5V12l3 2" stroke="${C.coral}" stroke-width="1.9" stroke-linecap="round" fill="none"/>`),
   walkability: svg(`<ellipse cx="9" cy="8" rx="2.6" ry="4" fill="${C.mint}" stroke="#4FB08B" stroke-width="1.2"/><ellipse cx="15" cy="15" rx="2.6" ry="4" fill="${C.mint}" stroke="#4FB08B" stroke-width="1.2"/>`),
   transit: svg(`<rect x="4" y="4.5" width="16" height="12" rx="3.2" fill="${C.sky}"/><rect x="6" y="7" width="12" height="4.5" rx="1.2" fill="#fff"/><circle cx="8" cy="18" r="1.8" fill="${C.ink}"/><circle cx="16" cy="18" r="1.8" fill="${C.ink}"/>`),
+  variety: svg(`<rect x="3.5" y="11" width="5" height="9" rx="1" fill="${C.butter}" stroke="#E0B85A" stroke-width="1.1"/><rect x="9.5" y="5" width="5" height="15" rx="1" fill="${C.sky}" stroke="#6FA2D6" stroke-width="1.1"/><rect x="15.5" y="9" width="5" height="11" rx="1" fill="${C.mint}" stroke="#4FB08B" stroke-width="1.1"/>`),
+  food: svg(`<path d="M5 10h12v4a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5z" fill="${C.peach}" stroke="#D9784F" stroke-width="1.3"/><path d="M17 11.5h1.5a2 2 0 0 1 0 4H16.5" fill="none" stroke="#D9784F" stroke-width="1.3"/><path d="M9 4c-1 1.5 1 2 0 3.5M12.5 4c-1 1.5 1 2 0 3.5" stroke="#B8C4D8" stroke-width="1.3" stroke-linecap="round" fill="none"/>`),
+  cleanAir: svg(`<path d="M3 9h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 17h7" stroke="#7FC9B0" stroke-width="2" stroke-linecap="round" fill="none"/>`),
   shops: svg(`<path d="M6 9h12l-1 11H7z" fill="${C.mint}" stroke="#4FB08B" stroke-width="1.2" stroke-linejoin="round"/><path d="M9 9V7.5a3 3 0 0 1 6 0V9" fill="none" stroke="#4FB08B" stroke-width="1.5"/>`),
 };

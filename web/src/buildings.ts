@@ -13,7 +13,7 @@ export const MAT_GLOW = new THREE.MeshBasicMaterial({ vertexColors: true, toneMa
 
 /** Height of a block's top surface. */
 export const TILE_TOP = 0.16;
-export const FLOOR = { housing: 0.52, office: 0.62, shop: 0.52, bar: 0.55 };
+export const FLOOR = { housing: 0.52, office: 0.62, shop: 0.52, bar: 0.55, food: 0.52 };
 
 export interface Piece { obj: THREE.Group; delay: number }
 
@@ -22,6 +22,10 @@ export interface BuildCtx {
   center: V2;
   rng: Rng;
   keepClear?: V2;  // a spot to leave free (the subway entrance)
+  /** Block number: picks the layout template, so neighboring blocks look different. */
+  index?: number;
+  /** A per-town number, so the same block number gets different templates in different towns. */
+  townSalt?: number;
   fixed?: boolean;
   spots?: LifeSpots; // filled with benches and stroll spots for idle residents
 }
@@ -31,7 +35,8 @@ export function buildingHeight(b: Building): number {
   const s = Math.max(1, b.stories);
   switch (b.kind) {
     case "housing": return s * FLOOR.housing + 0.45;
-    case "office": return s * FLOOR.office + 0.25;
+    case "office": return s * FLOOR.office + (s >= 4 ? 0.7 : 0.25);
+    case "food": return s * FLOOR.food + 0.45;
     case "shop": return s * FLOOR.shop + 0.15;
     case "bar": return FLOOR.bar + 0.4;
     case "park": return 0.9;
@@ -215,8 +220,16 @@ function tower(p: V2, n: V2, s: number, floors: number, r: Rng): THREE.Group {
       if (k === 0 && e === 2) wallPatch(m, a, b, 0.4, 0.6, y, y + 0.36, col("#3E5E9A"), 0.02);
     }
   }
-  const top = y0 + floors * fh;
+  let top = y0 + floors * fh;
   flatRoof(m, F, p, top, "#EAF3FC");
+  if (floors >= 4) {
+    // tall towers: a glassy set-back crown with a white cap
+    const G = scaleAbout(F, p, 0.62);
+    m.prism(G, top + 0.1, top + 0.42, col("#7FA6DC"), null);
+    for (let e = 0; e < 4; e++) wallPatch(m, G[e], G[(e + 1) % 4], 0.1, 0.9, top + 0.16, top + 0.36, col("#BFD8F6"), 0.012);
+    flatRoof(m, G, p, top + 0.42, "#F4F8FD");
+    top += 0.42;
+  }
   // a rooftop sign facing the street, and an antenna
   const ang = Math.atan2(n.x, n.y);
   const q = add(p, mul(n, s * 0.2));
@@ -440,9 +453,186 @@ function scatter(m: GB, area: V2[], occ: Occ, r: Rng, weights: [Item, number][],
   }
 }
 
+// ---------- food, fences, lots and other V2 pieces ----------
+
+const FOOD_WALLS = [C.peach, "#FFD8B8", "#FFE3C9"];
+
+/** A café or a small restaurant: stacked floors, a scalloped awning, warm windows and a sign. */
+function eatery(p: V2, n: V2, w: number, d: number, floors: number, r: Rng, style: "cafe" | "restaurant"): THREE.Group {
+  const m = new GB(), g = new GB();
+  const F = rect(p, n, w, d);
+  const fh = FLOOR.food;
+  const wall = col(style === "cafe" ? r.pick(FOOD_WALLS) : r.pick(["#F2A07E", C.terracotta, "#F4B08C"]));
+  m.prism(scaleAbout(F, p, 1.07), TILE_TOP, TILE_TOP + 0.06, white());
+  const y0 = TILE_TOP + 0.06;
+  for (let k = 0; k < floors; k++) {
+    const y = y0 + k * fh;
+    m.prism(F, y, y + fh, wall, null);
+    if (k > 0) { m.prism(scaleAbout(F, p, 1.045), y - 0.035, y + 0.035, white()); windows(m, F, y, fh, col(C.window), 0.42, -1); }
+  }
+  const a = F[2], b = F[3];
+  // ground floor: a big warm window front and a door
+  for (let e = 0; e < 4; e++) if (e !== 2) wallPatch(g, F[e], F[(e + 1) % 4], 0.25, 0.75, y0 + 0.14, y0 + 0.38, col(C.windowWarm), 0.014);
+  wallPatch(g, a, b, 0.1, 0.4, y0 + 0.08, y0 + 0.38, col(C.windowWarm), 0.014);
+  wallPatch(g, a, b, 0.6, 0.9, y0 + 0.08, y0 + 0.38, col(C.windowWarm), 0.014);
+  wallPatch(m, a, b, 0.43, 0.57, y0, y0 + 0.36, col(style === "cafe" ? "#8A5A3B" : "#5E3A2E"), 0.018);
+  // scalloped awning across the front
+  const N = 7, h = y0 + 0.46, aw = style === "cafe" ? "#FF8B7B" : "#2F6F5E";
+  for (let j = 0; j < N; j++) {
+    const p0 = add(a, mul(sub(b, a), 0.03 + (0.94 * j) / N)), p1 = add(a, mul(sub(b, a), 0.03 + (0.94 * (j + 1)) / N));
+    m.quad(w3(add(p0, mul(n, 0.01)), h), w3(add(p1, mul(n, 0.01)), h), w3(add(p1, mul(n, 0.3)), h - 0.15), w3(add(p0, mul(n, 0.3)), h - 0.15), j % 2 ? white() : col(aw), [n.x, 1, -n.y]);
+    const pm = mid(p0, p1);
+    m.tri(w3(add(p0, mul(n, 0.3)), h - 0.15), w3(add(p1, mul(n, 0.3)), h - 0.15), w3(add(pm, mul(n, 0.31)), h - 0.22), j % 2 ? white() : col(aw), [n.x, 0, -n.y]);
+  }
+  const top = y0 + floors * fh;
+  if (style === "cafe") {
+    pitchedRoof(m, F, p, top, Math.min(0.4, Math.min(w, d) * 0.42), col(r.pick(["#E98A6A", "#D9784F", C.coral])), wall);
+    // a big coffee cup on a bracket over the door
+    const q = add(add(mid(a, b), mul(n, 0.36)), mul(norm(sub(b, a)), 0.42));
+    m.geom(SHAPES.cyl, trs(q.x, h + 0.02, -q.y, 0.012, 0.18, 0.012), col("#6B7A99"));
+    m.geom(SHAPES.cyl, trs(q.x, h + 0.2, -q.y, 0.11, 0.16, 0.11), white());
+    m.geom(SHAPES.cyl, trs(q.x, h + 0.285, -q.y, 0.1, 0.012, 0.1), col("#8A5A3B"));
+    m.geom(SHAPES.ballLo, trs(q.x + n.y * 0.12, h + 0.2, -(q.y - n.x * 0.12), 0.05, 0.06, 0.05), white());
+  } else {
+    flatRoof(m, F, p, top, "#F7E3D2");
+    // a rooftop sign board with a fork-and-knife mark
+    const ang = Math.atan2(n.x, n.y);
+    const q = add(p, mul(n, d * 0.25));
+    m.geom(SHAPES.box, trs(q.x, top + 0.42, -q.y, w * 0.7, 0.42, 0.06, ang), col("#2F6F5E"));
+    const f = add(q, mul(n, 0.04));
+    const side = norm(sub(b, a));
+    for (const [dx, wd] of [[-0.09, 0.025], [0.09, 0.03]] as const) {
+      const c2 = add(f, mul(side, dx));
+      m.geom(SHAPES.box, trs(c2.x, top + 0.42, -c2.y, wd, 0.28, 0.01, ang), white());
+    }
+    m.geom(SHAPES.ballLo, trs(f.x + side.x * 0.09, top + 0.52, -(f.y + side.y * 0.09), 0.035, 0.06, 0.012), white());
+    for (const t of [0.15, 0.85]) {
+      const q2 = add(add(a, mul(sub(b, a), t)), mul(n, 0.32));
+      g.geom(SHAPES.bulb, trs(q2.x, h - 0.12, -q2.y, 0.05, 0.065, 0.05), col("#FFC86B"));
+    }
+  }
+  return group(m, g, p);
+}
+
+/** A round café table with a parasol and chairs; chairs become seats for idle cats. */
+function terraceTable(m: GB, p: V2, r: Rng, spots?: LifeSpots, parasol = true) {
+  m.geom(SHAPES.cyl, trs(p.x, TILE_TOP + 0.16, -p.y, 0.14, 0.025, 0.14), white());
+  m.geom(SHAPES.cyl, trs(p.x, TILE_TOP + 0.08, -p.y, 0.02, 0.16, 0.02), col("#6B7A99"));
+  if (parasol) {
+    m.geom(SHAPES.cyl, trs(p.x, TILE_TOP + 0.4, -p.y, 0.012, 0.5, 0.012), white());
+    m.geom(SHAPES.cone, trs(p.x, TILE_TOP + 0.66, -p.y, 0.34, 0.14, 0.34), col(r.pick(["#FF8B7B", "#FFE19A", "#9FE2C6", "#F7A8C8"])));
+  }
+  const a0 = r.range(0, Math.PI);
+  for (let k = 0; k < 2; k++) {
+    const a = a0 + k * Math.PI;
+    const q = add(p, v2(Math.cos(a) * 0.24, Math.sin(a) * 0.24));
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.09, -q.y, 0.1, 0.03, 0.1), col("#C99A72"));
+    const ang = Math.atan2(-Math.cos(a), -Math.sin(a));
+    spots?.benches.push({ p: q, ang });
+  }
+}
+
+/** A row of white picket fence from a to b. */
+function fence(m: GB, a: V2, b: V2) {
+  const L = dist(a, b), d = norm(sub(b, a));
+  const ang = Math.atan2(d.y, d.x);
+  const mdl = mid(a, b);
+  m.geom(SHAPES.box, trs(mdl.x, TILE_TOP + 0.13, -mdl.y, L, 0.025, 0.02, ang), white());
+  for (let s = 0; s <= L; s += 0.12) {
+    const q = add(a, mul(d, s));
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.1, -q.y, 0.03, 0.18, 0.02, ang), white());
+  }
+}
+
+/** A small parking lot: gray asphalt, white bays and a few parked cars. */
+function parkingLot(m: GB, p: V2, n: V2, w: number, d: number, r: Rng) {
+  m.prism(rect(p, n, w, d), TILE_TOP, TILE_TOP + 0.03, col("#CFCBD9"), col("#D8D4E2"));
+  const a = v2(n.y, -n.x);
+  const bays = Math.max(2, Math.floor(w / 0.42));
+  for (let j = 0; j <= bays; j++) {
+    const q = add(p, mul(a, -w / 2 + (j * w) / bays));
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.035, -q.y, 0.02, 0.005, d * 0.8, Math.atan2(n.x, n.y)), white());
+  }
+  for (let j = 0; j < bays; j++) {
+    if (r.chance(0.35)) continue;
+    const q = add(p, mul(a, -w / 2 + ((j + 0.5) * w) / bays));
+    const ang = Math.atan2(n.x, n.y);
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.1, -q.y, 0.2, 0.1, 0.34, ang), col(r.pick(["#FF8B7B", "#9CCAF4", "#9FE2C6", "#CDB6F3", "#FFE19A"])));
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.18, -q.y, 0.18, 0.08, 0.18, ang), col("#F4F8FF"));
+  }
+}
+
+/** A tiered fountain on a round basin. */
+function fountain(m: GB, g: GB, p: V2, s = 1) {
+  const ring = (rad: number) => Array.from({ length: 18 }, (_, k) => add(p, v2(Math.cos((k / 18) * 6.283) * rad, Math.sin((k / 18) * 6.283) * rad)));
+  m.prism(ring(0.62 * s), TILE_TOP, TILE_TOP + 0.13, white(), white());
+  m.prism(ring(0.52 * s), TILE_TOP + 0.13, TILE_TOP + 0.135, col(C.water), col(C.water));
+  m.geom(SHAPES.cyl, trs(p.x, TILE_TOP + 0.3, -p.y, 0.07 * s, 0.34, 0.07 * s), white());
+  m.geom(SHAPES.cyl, trs(p.x, TILE_TOP + 0.46, -p.y, 0.24 * s, 0.05, 0.24 * s), white());
+  g.geom(SHAPES.ball, trs(p.x, TILE_TOP + 0.56, -p.y, 0.08 * s, 0.14, 0.08 * s), col("#C9F0FA"));
+}
+
+/** A swing set, a slide and a sandbox. */
+function playground(m: GB, p: V2, n: V2) {
+  const a = v2(n.y, -n.x), ang = Math.atan2(n.x, n.y);
+  m.prism(rect(p, n, 1.7, 1.1), TILE_TOP, TILE_TOP + 0.045, col(C.sand), col(C.sand));
+  const s0 = add(p, mul(a, -0.45));
+  for (const k of [-1, 1]) { const q = add(s0, mul(a, k * 0.3)); m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.25, -q.y, 0.02, 0.5, 0.02), col("#FF8B7B")); }
+  m.geom(SHAPES.box, trs(s0.x, TILE_TOP + 0.5, -s0.y, 0.64, 0.03, 0.03, ang + Math.PI / 2), col("#FF8B7B"));
+  for (const k of [-0.13, 0.13]) { const q = add(s0, mul(a, k)); m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.16, -q.y, 0.1, 0.02, 0.06, ang + Math.PI / 2), col("#FFE19A")); }
+  const sl = add(p, mul(a, 0.4));
+  m.geom(SHAPES.box, trs(sl.x, TILE_TOP + 0.18, -sl.y, 0.18, 0.36, 0.18, ang), col("#9CCAF4"));
+  const sl2 = add(sl, mul(n, 0.26));
+  const slide = new THREE.Matrix4().compose(new THREE.Vector3(sl2.x, TILE_TOP + 0.18, -sl2.y), new THREE.Quaternion().setFromEuler(new THREE.Euler(0.65, ang, 0, "YXZ")), new THREE.Vector3(0.14, 0.02, 0.5));
+  m.geom(SHAPES.box, slide, col("#FFC83D"));
+}
+
+/** A striped market stall. */
+function stall(m: GB, p: V2, n: V2, color: string) {
+  const ang = Math.atan2(n.x, n.y);
+  m.geom(SHAPES.box, trs(p.x, TILE_TOP + 0.12, -p.y, 0.5, 0.18, 0.26, ang), col("#C99A72"));
+  for (let j = 0; j < 4; j++) {
+    const q = add(p, mul(v2(n.y, -n.x), -0.19 + j * 0.125));
+    m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.42, -q.y, 0.125, 0.03, 0.34, ang), j % 2 ? white() : col(color));
+  }
+  for (const k of [-1, 1]) { const q = add(p, mul(v2(n.y, -n.x), k * 0.23)); m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.3, -q.y, 0.012, 0.3, 0.012), white()); }
+  const fruit = ["#FF8B7B", "#FFC83D", "#5FBF6A", "#F7A8C8"];
+  for (let k = 0; k < 5; k++) { const q = add(p, mul(v2(n.y, -n.x), -0.18 + k * 0.09)); m.geom(SHAPES.ballLo, trs(q.x, TILE_TOP + 0.24, -q.y, 0.04, 0.04, 0.04), col(fruit[k % 4])); }
+}
+
+/** Vegetable rows (allotments). */
+function veggies(m: GB, p: V2, n: V2, w: number, d: number) {
+  m.prism(rect(p, n, w, d), TILE_TOP, TILE_TOP + 0.05, col("#B98B6A"), col("#A9805F"));
+  const a = v2(n.y, -n.x);
+  const rows = Math.max(2, Math.floor(w / 0.22));
+  for (let j = 0; j < rows; j++) {
+    const q0 = add(p, mul(a, -w / 2 + (j + 0.5) * (w / rows)));
+    for (let s = -d / 2 + 0.1; s < d / 2 - 0.05; s += 0.14) {
+      const q = add(q0, mul(n, s));
+      m.geom(SHAPES.ballLo, trs(q.x, TILE_TOP + 0.08, -q.y, 0.05, 0.05, 0.05), col(j % 2 ? "#5FBF6A" : "#7FD07F"));
+    }
+  }
+}
+
+/** A small garden pool. */
+function pool(m: GB, p: V2, n: V2) {
+  m.prism(rect(p, n, 0.8, 0.5), TILE_TOP, TILE_TOP + 0.06, white(), white());
+  m.prism(rect(p, n, 0.66, 0.36), TILE_TOP + 0.06, TILE_TOP + 0.062, col("#7FD3EA"), col("#7FD3EA"));
+}
+
+/** Pick a template for a block: the URL can force one (`?tpl=N`), else block number + seed. */
+function pickTemplate(ctx: BuildCtx, n: number): number {
+  const forced = new URLSearchParams(location.search).get("tpl");
+  if (forced !== null && /^\d+$/.test(forced)) return Number(forced) % n;
+  return ((ctx.index ?? 0) + (ctx.townSalt ?? 0)) % n;
+}
+
 // ---------- layout per kind ----------
 
-/** Build the pieces for one block. Each piece grows in on its own (staggered by `delay`). */
+/** Build the pieces for one block. Each piece grows in on its own (staggered by `delay`).
+ * Every kind has a few layout templates; the block number and the town pick one, and the
+ * block's own seed rotates and jitters it, so no two blocks look the same. Kind and floors
+ * stay readable: every building on a block has the block's number of floors. */
 export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
   const { poly, center, rng } = ctx;
   const floors = Math.max(1, b.stories);
@@ -454,104 +644,268 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
   const push = (obj: THREE.Group, delay: number) => out.push({ obj, delay });
   const area = inset(poly, 0.3); // inside the sidewalk ring
   const spots = ctx.spots;
+  /** Does a w×d footprint at p facing n fit inside the block and clear of other things? */
+  const fits = (p: V2, n: V2, w: number, d: number, pad = 0.05) => rect(p, n, w + pad * 2, d + pad * 2).every((q) => pointInPolygon(q, area)) && clearOf(p, Math.hypot(w, d) / 2 * 0.8);
+  const claim = (p: V2, w: number, d: number) => occ.push({ p, rad: Math.hypot(w, d) / 2 * 0.95 });
+  /** A short paved path from a front door to the sidewalk. */
+  const path = (g: GB, f0: V2, f1: V2, wid = 0.1) => {
+    const dn = norm(sub(f1, f0)), pn = v2(-dn.y * wid, dn.x * wid);
+    g.quad(w3(add(f0, pn), TILE_TOP + 0.045), w3(sub(f0, pn), TILE_TOP + 0.045), w3(sub(f1, pn), TILE_TOP + 0.045), w3(add(f1, pn), TILE_TOP + 0.045), col(C.plot), [0, 1, 0]);
+  };
+  const rot = rng.int(0, E.length - 1); // which edge a template treats as its "front"
+  const ER = [...E.slice(rot), ...E.slice(0, rot)].filter((e) => e.len > 0.5);
+  const front = E[rot % Math.min(2, E.length)];
 
   switch (b.kind) {
     case "housing": {
-      // 3-5 houses facing the streets, each with a path; gardens fill the rest
-      const fronts: V2[] = [];
+      const tpl = pickTemplate(ctx, 4);
       const g = new GB();
       lawn(g, area, TILE_TOP);
-      const slots: { e: (typeof E)[number]; at: V2; w: number }[] = [];
-      for (const e of E) {
-        if (e.len < 1.1) continue;
-        const two = e.len > 3.4;
-        const w = Math.min(1.5, Math.max(0.95, e.len * (two ? 0.3 : 0.46)));
-        const dir = norm(sub(e.b, e.a));
-        if (two) { slots.push({ e, at: add(e.m, mul(dir, -e.len * 0.22)), w }, { e, at: add(e.m, mul(dir, e.len * 0.22)), w }); }
-        else slots.push({ e, at: e.m, w });
+      let houses = 0;
+      const addHouse = (p: V2, n: V2, w: number, d: number) => { claim(p, w, d); push(house(p, n, w, d, floors, rng), houses++ * 0.07); };
+      const fronts: V2[] = [];
+      if (tpl === 0 || tpl === 3) {
+        // street fronts: houses face every street, each with a path; tpl 3 adds fenced yards
+        for (const e of ER) {
+          if (e.len < 1.1) continue;
+          const k = e.len > 5 ? 3 : e.len > 3.2 ? 2 : 1;
+          const w = Math.min(1.45, Math.max(0.95, (e.len / k) * rng.range(0.5, 0.62)));
+          const d = Math.min(1.15, Math.max(0.85, r * 0.36)) * rng.range(0.9, 1.08);
+          const dir = norm(sub(e.b, e.a));
+          for (let j = 0; j < k; j++) {
+            const at = add(e.m, mul(dir, ((j + 0.5) / k - 0.5) * e.len * 0.8 + rng.range(-0.15, 0.15)));
+            const setback = tpl === 3 ? 0.75 : 0.42;
+            const p = add(at, mul(e.n, -(d / 2 + setback)));
+            if (!fits(p, e.n, w, d)) continue;
+            addHouse(p, e.n, w, d);
+            const f0 = add(p, mul(e.n, d / 2)), f1 = add(at, mul(e.n, -0.22));
+            path(g, f0, f1);
+            fronts.push(f1, add(p, mul(e.n, d / 2 + 0.1)));
+            if (tpl === 3) {
+              // a picket-fenced front yard with a gate gap
+              const side = v2(e.n.y, -e.n.x);
+              const yA = add(add(p, mul(e.n, d / 2 + 0.5)), mul(side, -w / 2 - 0.1)), yB = add(add(p, mul(e.n, d / 2 + 0.5)), mul(side, w / 2 + 0.1));
+              const gate = add(p, mul(e.n, d / 2 + 0.5));
+              fence(g, yA, add(gate, mul(side, -0.14)));
+              fence(g, add(gate, mul(side, 0.14)), yB);
+              if (rng.chance(0.5)) flowerBed(g, add(add(p, mul(e.n, d / 2 + 0.25)), mul(side, w * 0.3)), rng);
+            }
+          }
+        }
+        if (tpl === 0) hedges(g, area, occ, rng, fronts);
+        // the middle: allotments, a pool or a little green with a big tree
+        const c2 = add(center, v2(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)));
+        const pick = rng.int(0, 2);
+        if (pick === 0 && fits(c2, front.n, 1.6, 1.0)) { veggies(g, c2, front.n, 1.6, 1.0); claim(c2, 1.6, 1.0); }
+        else if (pick === 1 && fits(c2, front.n, 0.9, 0.6)) { pool(g, c2, front.n); claim(c2, 0.9, 0.6); }
+        else if (clearOf(c2, 0.5)) { tree(g, c2, 1.5, rng, TILE_TOP); occ.push({ p: c2, rad: 0.5 }); }
+      } else if (tpl === 1) {
+        // a close: houses on a ring around a shared green, a lane in from the street
+        const R = Math.max(1.4, r * rng.range(0.52, 0.6));
+        const ringPts = Array.from({ length: 24 }, (_, k) => add(center, v2(Math.cos((k / 24) * 6.283) * (R - 0.95), Math.sin((k / 24) * 6.283) * (R - 0.95))));
+        g.prism(ringPts, TILE_TOP, TILE_TOP + 0.045, col(C.plot), col(C.plot));
+        const greenPts = ringPts.map((q) => add(center, mul(sub(q, center), 0.7)));
+        g.prism(greenPts, TILE_TOP, TILE_TOP + 0.055, col("#9FD27F"), col("#9FD27F"));
+        tree(g, center, 1.4, rng, TILE_TOP + 0.05);
+        occ.push({ p: center, rad: R - 0.6 });
+        const n0 = rng.int(6, 9), a0 = rng.range(0, 6.283);
+        for (let k = 0; k < n0; k++) {
+          const a = a0 + (k / n0) * 6.283;
+          const p = add(center, v2(Math.cos(a) * R, Math.sin(a) * R));
+          const n = norm(sub(center, p));
+          const w = rng.range(1.0, 1.25), d = rng.range(0.85, 1.0);
+          if (!fits(p, n, w, d)) continue;
+          addHouse(p, n, w, d);
+        }
+        // the lane to the street
+        const e = front;
+        path(g, add(center, mul(norm(sub(e.m, center)), R - 0.9)), add(e.m, mul(e.n, -0.2)), 0.22);
+        for (let k = 0; k < 4; k++) spots?.strolls.push(add(center, v2(Math.cos(k * 1.57 + 0.5) * (R - 0.95), Math.sin(k * 1.57 + 0.5) * (R - 0.95))));
+      } else {
+        // terraces: attached narrow houses in rows along the two longest streets, with back gardens
+        for (const e of [ER[0], ER[1]].filter(Boolean)) {
+          const dir = norm(sub(e.b, e.a));
+          const wEach = rng.range(0.72, 0.85), d = 1.0;
+          const k = Math.max(2, Math.floor((e.len * 0.78) / wEach));
+          const start = -((k - 1) / 2) * wEach;
+          for (let j = 0; j < k; j++) {
+            const at = add(e.m, mul(dir, start + j * wEach));
+            const p = add(at, mul(e.n, -(d / 2 + 0.38)));
+            if (!fits(p, e.n, wEach - 0.02, d, 0.0)) continue;
+            addHouse(p, e.n, wEach - 0.02, d);
+            path(g, add(p, mul(e.n, d / 2)), add(at, mul(e.n, -0.22)), 0.07);
+            // back garden fence
+            const back = add(p, mul(e.n, -d / 2 - 0.7));
+            if (pointInPolygon(back, area)) fence(g, add(back, mul(dir, -wEach / 2)), add(back, mul(dir, wEach / 2)));
+            if (j % 2 === 0 && rng.chance(0.7)) { const q = add(p, mul(e.n, -d / 2 - 0.35)); if (clearOf(q, 0.1)) bush(g, q, 0.8, rng); }
+          }
+        }
+        // shared allotments in the middle
+        const c2 = center;
+        if (fits(c2, front.n, 1.8, 1.2)) { veggies(g, c2, front.n, 1.8, 1.2); claim(c2, 1.8, 1.2); }
       }
-      for (const { e, at, w } of slots) {
-        if (fronts.length >= 12) break;
-        const d = Math.min(1.15, Math.max(0.85, r * 0.4));
-        const p = add(at, mul(e.n, -(d / 2 + 0.42)));
-        const rad = Math.hypot(w, d) / 2;
-        if (!pointInPolygon(p, poly) || !clearOf(p, rad * 0.85)) continue;
-        occ.push({ p, rad: rad * 0.95 });
-        push(house(p, e.n, w, d, floors, rng), fronts.length * 0.08);
-        // a little path from the front door to the sidewalk
-        const f0 = add(p, mul(e.n, d / 2)), f1 = add(at, mul(e.n, -0.22));
-        const pn = v2(-e.n.y * 0.1, e.n.x * 0.1);
-        g.quad(w3(add(f0, pn), TILE_TOP + 0.045), w3(sub(f0, pn), TILE_TOP + 0.045), w3(sub(f1, pn), TILE_TOP + 0.045), w3(add(f1, pn), TILE_TOP + 0.045), col(C.plot), [0, 1, 0]);
-        fronts.push(f1, add(p, mul(e.n, d / 2 + 0.1)));
-      }
-      hedges(g, area, occ, rng, fronts);
       scatter(g, area, occ, rng, [["tree", 0.35], ["bush", 0.15], ["flowers", 0.22], ["bench", 0.1]], spots, center);
       push(group(g, null, center), 0.3);
       break;
     }
     case "office": {
-      const s = Math.min(2.2, Math.max(1.3, r * 0.9));
-      push(tower(center, E[0].n, s, floors, rng), 0);
-      occ.push({ p: center, rad: s * 0.72 });
+      const tpl = pickTemplate(ctx, 3);
       const g = new GB();
       lawn(g, area, TILE_TOP);
-      // a paved plaza around the tower
-      g.prism(rect(center, E[0].n, s * 1.7, s * 1.55), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
-      occ.push({ p: center, rad: s * 0.95 });
+      const n = front.n;
+      if (tpl === 1) {
+        // twin towers on a shared plaza, a fountain between them
+        const s = Math.min(1.8, Math.max(1.15, r * 0.62));
+        const side = v2(n.y, -n.x);
+        const gap = s * 0.95;
+        g.prism(rect(center, n, s * 3.4, s * 1.7), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
+        for (const k of [-1, 1]) { const p = add(center, mul(side, k * gap)); push(tower(p, n, s, floors, rng), k > 0 ? 0.1 : 0); occ.push({ p, rad: s * 0.72 }); }
+        const fg = new GB();
+        fountain(g, fg, add(center, mul(n, s * 0.45)), 0.75);
+        occ.push({ p: center, rad: s * 1.6 });
+        if (!fg.empty) push(group(fg, null, center), 0.3);
+      } else {
+        // one tower; tpl 2 sets it toward the street and adds a parking lot behind
+        const s = Math.min(2.2, Math.max(1.3, r * 0.9)) * (tpl === 2 ? 0.85 : 1);
+        const p = tpl === 2 ? add(center, mul(n, Math.min(r * 0.35, 1.2))) : center;
+        push(tower(p, n, s, floors, rng), 0);
+        occ.push({ p, rad: s * 0.72 });
+        g.prism(rect(p, n, s * 1.7, s * 1.55), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
+        occ.push({ p, rad: s * 0.95 });
+        const lotP = add(p, mul(n, -(s * 0.78 + 0.75)));
+        if (fits(lotP, n, s * 1.6, 1.0)) { parkingLot(g, lotP, n, s * 1.6, 1.0, rng); claim(lotP, s * 1.6, 1.0); }
+      }
       scatter(g, area, occ, rng, [["tree", 0.3], ["planter", 0.15], ["bench", 0.15], ["flowers", 0.18], ["bush", 0.1]], spots, center, 0.75);
       push(group(g, null, center), 0.3);
       break;
     }
     case "shop": {
-      const e = E[0];
-      const k = e.len > 3.2 ? 3 : 2;
-      const total = Math.min(e.len * 0.82, k * 1.4);
-      const w = total / k - 0.08;
-      const d = Math.min(1.05, Math.max(0.85, r * 0.38));
-      const along = norm(sub(e.b, e.a));
-      const awnings = [C.coral, C.sky, "#F7A8C8"];
-      for (let j = 0; j < k; j++) {
-        const t = (j + 0.5) / k - 0.5;
-        const p = add(add(e.m, mul(along, t * total)), mul(e.n, -(d / 2 + 0.36)));
-        if (!clearOf(p, w / 2)) continue;
-        occ.push({ p, rad: Math.hypot(w, d) / 2 * 0.95 });
-        push(shop(p, e.n, w, d, floors, rng, awnings[j % 3]), j * 0.1);
-      }
+      const tpl = pickTemplate(ctx, 3);
       const g = new GB();
       lawn(g, area, TILE_TOP);
-      // a paved forecourt along the shop fronts
-      g.prism(rect(add(e.m, mul(e.n, -0.62)), e.n, total + 0.3, 0.64), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
-      for (let j = 0; j <= k; j++) {
-        const t = j / k - 0.5;
-        const q = add(add(e.m, mul(along, t * total)), mul(e.n, -0.5));
-        if (pointInPolygon(q, area)) { planter(g, q, rng); }
+      const awnings = [C.coral, C.sky, "#F7A8C8", C.butter];
+      let j0 = 0;
+      const row = (e: (typeof E)[number], k: number, inward = false) => {
+        const total = Math.min(e.len * 0.8, k * 1.4);
+        const w = total / k - 0.08;
+        const d = Math.min(1.05, Math.max(0.85, r * 0.38));
+        const along = norm(sub(e.b, e.a));
+        const n = inward ? mul(e.n, -1) : e.n;
+        for (let j = 0; j < k; j++) {
+          const t = (j + 0.5) / k - 0.5;
+          const p = add(add(e.m, mul(along, t * total)), mul(e.n, -(d / 2 + (inward ? 0.5 : 0.36))));
+          if (!fits(p, n, w, d, 0)) continue;
+          claim(p, w, d);
+          push(shop(p, n, w, d, floors, rng, awnings[(j0++) % awnings.length]), j0 * 0.08);
+        }
+        if (!inward) {
+          g.prism(rect(add(e.m, mul(e.n, -0.62)), e.n, total + 0.3, 0.64), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
+          for (let j = 0; j <= k; j++) { const q = add(add(e.m, mul(along, (j / k - 0.5) * total)), mul(e.n, -0.5)); if (pointInPolygon(q, area) && clearOf(q, 0.1)) planter(g, q, rng); }
+        }
+      };
+      if (tpl === 0) row(ER[0], ER[0].len > 3.2 ? 3 : 2);
+      else if (tpl === 1) { row(ER[0], ER[0].len > 3.6 ? 3 : 2); if (ER[2]) row(ER[2], 2); }
+      else {
+        // a market square: shops face inward around stalls
+        for (const e of ER.slice(0, 3)) row(e, 2, true);
+        const sq = Array.from({ length: 20 }, (_, k) => add(center, v2(Math.cos((k / 20) * 6.283) * r * 0.42, Math.sin((k / 20) * 6.283) * r * 0.42)));
+        g.prism(sq, TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
+        for (let k = 0; k < 4; k++) {
+          const a = k * 1.57 + rng.range(0, 0.4);
+          const q = add(center, v2(Math.cos(a) * r * 0.22, Math.sin(a) * r * 0.22));
+          stall(g, q, norm(sub(q, center)), awnings[k]);
+          occ.push({ p: q, rad: 0.35 });
+          spots?.strolls.push(add(q, mul(norm(sub(q, center)), 0.45)));
+        }
       }
       scatter(g, area, occ, rng, [["tree", 0.3], ["bench", 0.18], ["flowers", 0.2], ["bush", 0.12]], spots, center, 0.75);
       push(group(g, null, center), 0.3);
       break;
     }
+    case "food": {
+      const tpl = pickTemplate(ctx, 3);
+      const g = new GB();
+      lawn(g, area, TILE_TOP);
+      const d = 1.15;
+      let placed = 0;
+      const terrace = (e: (typeof E)[number], p: V2, w: number) => {
+        // a paved terrace between the door and the street, with parasol tables
+        const tp = add(p, mul(e.n, d / 2 + 0.45));
+        g.prism(rect(tp, e.n, w + 0.5, 0.75), TILE_TOP, TILE_TOP + 0.05, col("#F3E3CF"), col("#F3E3CF"));
+        const side = v2(e.n.y, -e.n.x);
+        const nT = Math.max(2, Math.round(w / 0.6));
+        for (let k = 0; k < nT; k++) { const q = add(tp, mul(side, ((k + 0.5) / nT - 0.5) * (w + 0.2))); terraceTable(g, q, rng, spots); occ.push({ p: q, rad: 0.3 }); }
+        // planters at the terrace corners
+        for (const k of [-1, 1]) { const q = add(tp, mul(side, k * (w / 2 + 0.35))); if (pointInPolygon(q, area) && clearOf(q, 0.1)) planter(g, q, rng); }
+      };
+      const place = (e: (typeof E)[number], style: "cafe" | "restaurant", w: number, at = e.m) => {
+        const p = add(at, mul(e.n, -(d / 2 + 0.95)));
+        if (!fits(p, e.n, w, d)) return false;
+        claim(p, w, d);
+        placed++;
+        push(eatery(p, e.n, w, d, floors, rng, style), out.length * 0.08);
+        terrace(e, p, w);
+        return true;
+      };
+      // big blocks get a second place on another street
+      const two = r > 2.6;
+      if (tpl === 0) { place(ER[0], "cafe", 1.6); if (two && ER[2]) place(ER[2], "cafe", 1.3); }
+      else if (tpl === 1) { place(ER[0], "restaurant", 1.9); if (two && ER[2]) place(ER[2], "cafe", 1.3); }
+      else { place(ER[0], "cafe", 1.4); if (ER[1]) place(ER[1], "restaurant", 1.7); }
+      // odd-shaped blocks: try every street, then smaller, so a food block always has its café
+      if (!placed) for (const w of [1.4, 1.1, 0.9]) { for (const e of ER) if (place(e, "cafe", w)) break; if (placed) break; }
+      if (!placed) { claim(center, 1.1, d); push(eatery(center, front.n, 1.1, d, floors, rng, "cafe"), 0); placed = 1; }
+      // a garden with string lights in the back
+      const back = add(center, mul(front.n, -r * 0.35));
+      if (clearOf(back, 0.6)) { for (let k = 0; k < 2; k++) { const q = add(back, mul(v2(front.n.y, -front.n.x), (k - 0.5) * 0.7)); if (clearOf(q, 0.2)) { terraceTable(g, q, rng, spots, false); occ.push({ p: q, rad: 0.3 }); } } }
+      scatter(g, area, occ, rng, [["tree", 0.32], ["flowers", 0.25], ["bush", 0.15], ["bench", 0.08]], spots, center, 0.75);
+      push(group(g, null, center), 0.3);
+      break;
+    }
     case "bar": {
-      const e = E[0];
-      const p = center;
-      const { m, g, top } = bar(p, e.n, Math.min(1.6, r * 0.8), Math.min(1.2, r * 0.6));
-      occ.push({ p, rad: Math.min(1.6, r * 0.8) * 0.75 });
+      const tpl = pickTemplate(ctx, 2);
+      const e = tpl === 0 ? E[0] : front;
+      const bw = Math.min(1.6, r * 0.8), bd = Math.min(1.2, r * 0.6);
+      const p = tpl === 0 ? center : add(e.m, mul(e.n, -(bd / 2 + 0.5)));
+      const n = tpl === 0 ? e.n : mul(e.n, -1); // the beer garden bar faces into its garden
+      const { m, g, top } = bar(p, n, bw, bd);
+      occ.push({ p, rad: bw * 0.75 });
       const yard = new GB();
       lawn(yard, area, TILE_TOP);
-      // patio with string lights to little poles
-      const poles = poly.map((v) => add(v, mul(sub(center, v), 0.42))).filter((q) => pointInPolygon(q, poly) && clearOf(q, 0.2)).slice(0, 4);
-      for (const q of poles) {
-        m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.4, -q.y, 0.022, 0.8, 0.022), col("#8C7AA8"));
-        bulbs(g, q, add(p, mul(sub(q, p), 0.25)), TILE_TOP + 0.78, top - 0.02, rng);
-        occ.push({ p: q, rad: 0.15 });
-      }
-      for (let k = 0; k < 2; k++) {
-        const q = add(add(p, mul(e.n, 0.95)), mul(v2(e.n.y, -e.n.x), (k - 0.5) * 0.9));
-        if (!pointInPolygon(q, poly)) continue;
-        m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.12, -q.y, 0.1, 0.05, 0.1), white());
-        m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.26, -q.y, 0.015, 0.4, 0.015), white());
-        m.geom(SHAPES.cone, trs(q.x, TILE_TOP + 0.48, -q.y, 0.26, 0.12, 0.26), col(k ? C.coral : C.lavender));
-        occ.push({ p: q, rad: 0.3 });
-        spots?.strolls.push(add(q, mul(e.n, 0.3)));
+      if (tpl === 0) {
+        // patio with string lights to little poles
+        const poles = poly.map((v) => add(v, mul(sub(center, v), 0.42))).filter((q) => pointInPolygon(q, poly) && clearOf(q, 0.2)).slice(0, 4);
+        for (const q of poles) {
+          m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.4, -q.y, 0.022, 0.8, 0.022), col("#8C7AA8"));
+          bulbs(g, q, add(p, mul(sub(q, p), 0.25)), TILE_TOP + 0.78, top - 0.02, rng);
+          occ.push({ p: q, rad: 0.15 });
+        }
+        for (let k = 0; k < 2; k++) {
+          const q = add(add(p, mul(e.n, 0.95)), mul(v2(e.n.y, -e.n.x), (k - 0.5) * 0.9));
+          if (!pointInPolygon(q, poly)) continue;
+          m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.12, -q.y, 0.1, 0.05, 0.1), white());
+          m.geom(SHAPES.cyl, trs(q.x, TILE_TOP + 0.26, -q.y, 0.015, 0.4, 0.015), white());
+          m.geom(SHAPES.cone, trs(q.x, TILE_TOP + 0.48, -q.y, 0.26, 0.12, 0.26), col(k ? C.coral : C.lavender));
+          occ.push({ p: q, rad: 0.3 });
+          spots?.strolls.push(add(q, mul(e.n, 0.3)));
+        }
+      } else {
+        // a beer garden: long tables under rows of lights in front of the bar
+        const gc = add(p, mul(n, bd / 2 + 1.1));
+        yard.prism(rect(gc, n, 2.4, 1.6), TILE_TOP, TILE_TOP + 0.05, col("#F1E6CC"), col("#F1E6CC"));
+        const side = v2(n.y, -n.x), ang = Math.atan2(side.x, side.y);
+        for (const k of [-0.4, 0.4]) {
+          const q = add(gc, mul(n, k));
+          m.geom(SHAPES.box, trs(q.x, TILE_TOP + 0.16, -q.y, 0.24, 0.03, 1.6, ang), col("#C99A72"));
+          for (const s2 of [-0.2, 0.2]) { const b2 = add(q, mul(n, s2)); m.geom(SHAPES.box, trs(b2.x, TILE_TOP + 0.09, -b2.y, 0.08, 0.03, 1.5, ang), col("#B98B6A")); }
+          spots?.strolls.push(add(q, mul(side, 0.9)));
+        }
+        for (const k of [-1, 1]) {
+          const q = add(add(gc, mul(side, k * 1.2)), mul(n, 0.8)), q2 = add(add(gc, mul(side, k * 1.2)), mul(n, -0.8));
+          for (const pp of [q, q2]) m.geom(SHAPES.cyl, trs(pp.x, TILE_TOP + 0.4, -pp.y, 0.022, 0.8, 0.022), col("#8C7AA8"));
+        }
+        for (const s2 of [-0.8, 0, 0.8]) bulbs(g, add(add(gc, mul(side, -1.2)), mul(n, s2)), add(add(gc, mul(side, 1.2)), mul(n, s2)), TILE_TOP + 0.78, TILE_TOP + 0.78, rng);
+        occ.push({ p: gc, rad: 1.3 });
       }
       hedges(yard, area, occ, rng);
       scatter(yard, area, occ, rng, [["tree", 0.3], ["flowers", 0.3], ["bench", 0.15], ["bush", 0.15]], spots, center);
@@ -560,27 +914,53 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
       break;
     }
     case "park": {
-      const m = new GB();
+      const tpl = pickTemplate(ctx, 3);
+      const m = new GB(), glow = new GB();
       lawn(m, inset(poly, 0.16), TILE_TOP);
-      // pond
-      const pc = add(center, v2(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)));
-      const rx = Math.max(0.5, r * 0.36), ry = Math.max(0.35, r * 0.25);
-      const pond: V2[] = [];
-      for (let k = 0; k < 20; k++) { const t = (k / 20) * Math.PI * 2; pond.push(add(pc, v2(Math.cos(t) * rx, Math.sin(t) * ry))); }
-      m.prism(scaleAbout(pond, pc, 1.12), TILE_TOP + 0.04, TILE_TOP + 0.05, col(C.sand), col(C.sand));
-      m.prism(pond, TILE_TOP + 0.05, TILE_TOP + 0.055, col(C.water), col(C.water));
-      occ.push({ p: pc, rad: Math.max(rx, ry) * 1.1 });
-      // a ring path around the pond
-      const ring = scaleAbout(pond, pc, 1.55), ring2 = scaleAbout(pond, pc, 1.35);
-      for (let k = 0; k < ring.length; k++) {
-        const k2 = (k + 1) % ring.length;
-        m.quad(w3(ring[k], TILE_TOP + 0.045), w3(ring[k2], TILE_TOP + 0.045), w3(ring2[k2], TILE_TOP + 0.045), w3(ring2[k], TILE_TOP + 0.045), col("#F1E6CC"), [0, 1, 0]);
+      if (tpl === 0) {
+        // pond with a ring path
+        const pc = add(center, v2(rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)));
+        const rx = Math.max(0.5, r * 0.36), ry = Math.max(0.35, r * 0.25);
+        const pond: V2[] = [];
+        for (let k = 0; k < 20; k++) { const t = (k / 20) * Math.PI * 2; pond.push(add(pc, v2(Math.cos(t) * rx, Math.sin(t) * ry))); }
+        m.prism(scaleAbout(pond, pc, 1.12), TILE_TOP + 0.04, TILE_TOP + 0.05, col(C.sand), col(C.sand));
+        m.prism(pond, TILE_TOP + 0.05, TILE_TOP + 0.055, col(C.water), col(C.water));
+        const ring = scaleAbout(pond, pc, 1.55), ring2 = scaleAbout(pond, pc, 1.35);
+        for (let k = 0; k < ring.length; k++) {
+          const k2 = (k + 1) % ring.length;
+          m.quad(w3(ring[k], TILE_TOP + 0.045), w3(ring[k2], TILE_TOP + 0.045), w3(ring2[k2], TILE_TOP + 0.045), w3(ring2[k], TILE_TOP + 0.045), col("#F1E6CC"), [0, 1, 0]);
+        }
+        occ.push({ p: pc, rad: Math.max(rx, ry) * 1.6 });
+        const bp = add(pc, v2(0, -(ry * 1.7 + 0.2)));
+        if (pointInPolygon(bp, poly)) { bench(m, bp, 0); spots?.benches.push({ p: bp, ang: 0 }); occ.push({ p: bp, rad: 0.3 }); }
+      } else if (tpl === 1) {
+        // a fountain plaza with paths out to every street
+        for (const e of E) path(m, center, add(e.m, mul(e.n, -0.15)), 0.16);
+        fountain(m, glow, center, 1.1);
+        occ.push({ p: center, rad: 1.0 });
+        for (let k = 0; k < 4; k++) {
+          const a = k * 1.57 + 0.78;
+          const q = add(center, v2(Math.cos(a) * 1.15, Math.sin(a) * 1.15));
+          const ang = Math.atan2(-Math.cos(a), -Math.sin(a)) + Math.PI;
+          bench(m, q, ang); spots?.benches.push({ p: q, ang }); occ.push({ p: q, rad: 0.3 });
+        }
+        for (const e of E) { const q = add(mid(center, e.m), mul(v2(e.n.y, -e.n.x), 0.45)); if (clearOf(q, 0.25)) { flowerBed(m, q, rng); occ.push({ p: q, rad: 0.3 }); } }
+      } else {
+        // a playground and a picnic meadow
+        const pp = add(center, mul(front.n, Math.min(1.0, r * 0.3)));
+        playground(m, pp, front.n);
+        occ.push({ p: pp, rad: 1.0 });
+        spots?.strolls.push(add(pp, mul(front.n, 0.7)), add(pp, mul(front.n, -0.7)));
+        const pic = add(center, mul(front.n, -Math.min(1.2, r * 0.35)));
+        if (clearOf(pic, 0.4)) {
+          m.prism(rect(pic, front.n, 0.6, 0.45), TILE_TOP, TILE_TOP + 0.05, col("#FF8B7B"), col("#FF8B7B"));
+          m.prism(rect(pic, front.n, 0.2, 0.45), TILE_TOP + 0.001, TILE_TOP + 0.052, white(), white());
+          occ.push({ p: pic, rad: 0.4 });
+          spots?.strolls.push(add(pic, v2(0.3, 0.1)));
+        }
       }
-      occ.push({ p: pc, rad: Math.max(rx, ry) * 1.6 });
-      const bp = add(pc, v2(0, -(ry * 1.7 + 0.2)));
-      if (pointInPolygon(bp, poly)) { bench(m, bp, 0); spots?.benches.push({ p: bp, ang: 0 }); occ.push({ p: bp, rad: 0.3 }); }
       scatter(m, inset(poly, 0.16), occ, rng, [["tree", 0.55], ["bush", 0.12], ["flowers", 0.15], ["bench", 0.1]], spots, center, 0.7);
-      push(group(m, null, center), 0);
+      push(group(m, glow.empty ? null : glow, center), 0);
       break;
     }
     default: {
@@ -650,6 +1030,14 @@ export function thumbModel(kind: string): THREE.Group {
       tree(m, v2(-0.45, 0.35), 1.15, r, TILE_TOP);
       tree(m, v2(0.45, 0.55), 0.9, r, TILE_TOP);
       tree(m, v2(-0.6, -0.4), 0.8, r, TILE_TOP);
+      g.add(group(m, null, v2(0, 0)));
+      break;
+    }
+    case "food": {
+      g.add(eatery(v2(-0.1, 0.25), n, 1.15, 0.85, 1, r, "cafe"));
+      const m = new GB();
+      terraceTable(m, add(v2(-0.1, 0.25), mul(n, 0.85)), r);
+      terraceTable(m, add(add(v2(-0.1, 0.25), mul(n, 0.7)), v2(0.62, 0.3)), r);
       g.add(group(m, null, v2(0, 0)));
       break;
     }

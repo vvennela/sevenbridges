@@ -8,7 +8,7 @@ import { TILE_TOP } from "./buildings";
 import { add, along, dist, mul, norm, polylineLength, sub, v2, type V2 } from "./geom";
 import { C, ROUTE_COLORS, SUBWAY_COLOR, groupColor } from "./palette";
 import { Rng } from "./rng";
-import type { Route, Segment, Trip } from "./types";
+import type { CatDay, Route, Segment, Trip } from "./types";
 
 interface Leg { pts: V2[]; L: number; speed: number; visible: boolean }
 /** A 1960s office outfit (looks only). */
@@ -24,6 +24,9 @@ export type IdleMode = "stroll" | "sit" | "wave" | "nap" | "groom" | "fight";
 interface Idler { c: V2; r: number; speed: number; phase: number; mode: IdleMode; ang: number; color: THREE.Color; coat: Coat; fit: Outfit; prop: Prop; fightEvery: number }
 type Prop = "cig" | "beer" | null;
 interface Bus { obj: THREE.Group; route: number; phase: number }
+interface DayPart { kind: "walk" | "car" | "ride"; pts: V2[]; L: number; speed: number; route?: number; board?: V2; alight?: V2; underFirst?: boolean }
+interface DayLeg { t0: number; parts: DayPart[]; ph: number }
+interface DayCat { id: number; legs: DayLeg[]; coat: Coat; fit: Outfit; accent: THREE.Color; carColor: THREE.Color }
 
 const MAX_PEOPLE = 700, MAX_CARS = 120, MAX_PROPS = 80, MAX_PUFFS = 120, MAX_DUST = 80;
 const CAR_COLORS = ["#FF8B7B", "#9CCAF4", "#9FE2C6", "#CDB6F3", "#FFE19A", "#F7A8C8"];
@@ -147,10 +150,26 @@ export class Transit {
     this.heads = mk("patch", mat);
     this.eyes = mk("face", new THREE.MeshBasicMaterial({ color: col("#2E3A59") }));
     this.cheeks = mk("pink", new THREE.MeshBasicMaterial({ color: col("#FF9FB0") }));
-    const carGeo = new THREE.BoxGeometry(0.34, 0.11, 0.18).translate(0, 0.085, 0);
-    const cabGeo = new THREE.BoxGeometry(0.18, 0.09, 0.16).translate(-0.02, 0.18, 0);
-    this.cars = new THREE.InstancedMesh(carGeo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), MAX_CARS);
-    this.cabins = new THREE.InstancedMesh(cabGeo, new THREE.MeshStandardMaterial({ color: col("#F4F8FF"), roughness: 0.5 }), MAX_CARS);
+    // little round cars: a colored body with a bumper line, a glassy cabin, dark wheels, a cat at the wheel
+    const carGeo = mergeGeometries([
+      new THREE.BoxGeometry(0.36, 0.1, 0.19, 1, 1, 1).translate(0, 0.095, 0),
+      new THREE.BoxGeometry(0.3, 0.06, 0.18).translate(0.005, 0.165, 0),
+      new THREE.CylinderGeometry(0.095, 0.095, 0.19, 10, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(-Math.PI / 2).scale(1.0, 0.55, 1).translate(0.13, 0.145, 0),
+    ].map((g) => g.toNonIndexed()))!;
+    const cabGeo = mergeGeometries([
+      new THREE.BoxGeometry(0.17, 0.085, 0.17).translate(-0.035, 0.235, 0),
+      new THREE.BoxGeometry(0.38, 0.03, 0.2).translate(0, 0.07, 0),
+    ].map((g) => g.toNonIndexed()))!;
+    this.cars = new THREE.InstancedMesh(carGeo, new THREE.MeshStandardMaterial({ roughness: 0.45 }), MAX_CARS);
+    this.cabins = new THREE.InstancedMesh(cabGeo, new THREE.MeshStandardMaterial({ color: col("#E8F0FF"), roughness: 0.25, metalness: 0.1 }), MAX_CARS);
+    const wheelGeo = mergeGeometries([-0.12, 0.12].flatMap((x) => [-0.09, 0.09].map((z) => new THREE.CylinderGeometry(0.048, 0.048, 0.04, 10).rotateX(Math.PI / 2).translate(x, 0.05, z).toNonIndexed())))!;
+    this.wheels = new THREE.InstancedMesh(wheelGeo, new THREE.MeshStandardMaterial({ color: col("#3B4560"), roughness: 0.8 }), MAX_CARS);
+    const headGeo = mergeGeometries([
+      new THREE.SphereGeometry(0.05, 10, 8).translate(-0.04, 0.245, 0).toNonIndexed(),
+      new THREE.ConeGeometry(0.02, 0.04, 5).translate(-0.04, 0.3, 0.025).toNonIndexed(),
+      new THREE.ConeGeometry(0.02, 0.04, 5).translate(-0.04, 0.3, -0.025).toNonIndexed(),
+    ])!;
+    this.drivers = new THREE.InstancedMesh(headGeo, new THREE.MeshToonMaterial({ gradientMap: ramp }), MAX_CARS);
     // limbs: instanced, posed per frame from the hip/shoulder
     this.legs = mk("leg", mat, MAX_PEOPLE * 2);
     this.arms = mk("arm", mat, MAX_PEOPLE * 2);
@@ -179,11 +198,13 @@ export class Transit {
     for (let k = 0; k < 4; k++) { const s = cussSprite(); s.visible = false; this.cussSprites.push(s); this.group.add(s); }
     for (const m of [this.cigs, this.beers, this.puffs, this.dust, this.stars]) { m.count = 0; m.frustumCulled = false; this.group.add(m); }
     for (const m of [...Object.values(this.wear), this.legs, this.arms, this.shoes]) { m.count = 0; m.frustumCulled = false; m.castShadow = true; this.group.add(m); }
-    for (const m of [this.bodies, this.heads, this.cars, this.cabins, this.eyes, this.cheeks, this.outline]) {
+    for (const m of [this.bodies, this.heads, this.cars, this.cabins, this.wheels, this.drivers, this.eyes, this.cheeks, this.outline]) {
       m.count = 0; m.frustumCulled = false; m.castShadow = true;
       this.group.add(m);
     }
   }
+  private wheels!: THREE.InstancedMesh;
+  private drivers!: THREE.InstancedMesh;
 
   // ---------- routes ----------
 
@@ -416,6 +437,197 @@ export class Transit {
       const L = polylineLength(pts);
       const legs: Leg[] = [{ pts, L, speed: 0.35, visible: true }, { pts: [...pts].reverse(), L, speed: 0.35, visible: true }];
       this.walkers.push({ demo: true, legs, T: (2 * L) / 0.35, car: false, phase: k * 1.6, lane: (k - 1) * 0.12, color: col(groupColor(k)), coat: COATS[k * 2], fit: k === 2 ? kidOutfit(rng) : outfit(rng, 0.5) });
+    }
+  }
+
+  private traffic: { a: V2; b: V2; ph: number; color: THREE.Color; fur: THREE.Color }[] = [];
+  /** Cars on busy streets: `level[seg]` 0..1 from Lean's traffic (up to 3 cars per street), or with
+   * `exact`, Lean's own number of cars per street (report.streets). */
+  setTraffic(level: number[] | null, exact = false) {
+    this.traffic = [];
+    if (!level) return;
+    const rng = new Rng(this.seed ^ 0xca5);
+    level.forEach((lv, si) => {
+      const ends = this.segEnds[si];
+      if (!ends || lv <= 0.05) return;
+      const n = exact ? Math.min(6, Math.round(lv)) : Math.max(1, Math.round(lv * 3));
+      for (let k = 0; k < n; k++) this.traffic.push({ a: ends[0], b: ends[1], ph: rng.range(0, 20) + k * 3.1, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
+    });
+  }
+
+  // ---------- Lean's simulated day (report.cats) ----------
+
+  static readonly DAY = 64;
+  static readonly PHASES = ["commute", "lunch", "evening", "home"];
+  /** Where downtown is (cars with no destination in town drive off this way). */
+  downtownDir: V2 = v2(0, 1);
+  private day: DayCat[] = [];
+  private dayStart = 0;
+  private now = 0;
+
+  /** The phase of the day shown right now: 0..3 and how far through it (0..1), or null with no day. */
+  dayClock(): { phase: number; u: number } | null {
+    if (!this.day.length) return null;
+    const u = ((this.now - this.dayStart) % Transit.DAY + Transit.DAY) % Transit.DAY;
+    const P = Transit.DAY / 4;
+    return { phase: Math.floor(u / P), u: (u % P) / P };
+  }
+
+  /** Play Lean's day: each cat's legs, phase by phase (null goes back to the trips view). */
+  setDay(cats: CatDay[] | null, routeOf?: (from: number | null, to: number | null) => number | null, restart = false) {
+    const hadDay = this.day.length > 0;
+    this.day = [];
+    this.busCache.clear();
+    if (!cats?.length) return;
+    // keep the clock running across edits; start over only when asked (Build) or when there was no day
+    if (restart || !hadDay) this.dayStart = this.now;
+    const rng = new Rng(this.seed ^ 0xda7);
+    const P = Transit.DAY / 4;
+    const phaseOf = (ph: string | number) => typeof ph === "number" ? ph : String(ph) === "morning" ? 0 : Math.max(0, Transit.PHASES.indexOf(String(ph)));
+    const place = (x: number | string | null) => (typeof x === "number" ? x : null); // "downtown" is off the map
+    for (const cat of cats.slice(0, 260)) {
+      const coat = rng.pick(COATS);
+      const fit: Outfit = { ...outfit(rng, cat.mobility === "driver" ? 0.2 : 0.4), cue: this.pickCue(cat.group, rng) };
+      const accent = col(groupColor(cat.group));
+      const carColor = col(rng.pick(CAR_COLORS));
+      const legs: DayLeg[] = [];
+      const busy = [0, 0, 0, 0];
+      // Lean lists legs in the order the cat makes them; the phase names are the time of day.
+      // A "home" leg followed by an evening outing is the trip home from work: it starts the evening.
+      let slot = 0;
+      for (const [li, lg] of cat.legs.entries()) {
+        let ph = Math.min(3, phaseOf(lg.phase));
+        if (ph === 3 && cat.legs.slice(li + 1).some((x) => phaseOf(x.phase) === 2)) ph = 2;
+        ph = Math.max(ph, slot);
+        slot = ph;
+        const mode = String(lg.mode);
+        const t0 = ph * P + 0.4 + busy[ph] + rng.range(0, P * 0.3);
+        const from = place(lg.from), to = place(lg.to);
+        const plan = this.dayLeg(from, to, mode, lg.route ?? (mode === "bus" && routeOf ? routeOf(from, to) : null), rng);
+        if (!plan) continue;
+        // squeeze a leg into what's left of its phase
+        const room = (ph + 1) * P - t0 - 0.3;
+        const need = plan.parts.reduce((a, x) => a + (x.kind === "ride" ? 0 : x.L / x.speed), 0);
+        const k = need > room * 0.7 ? need / (room * 0.7) : 1;
+        legs.push({ t0, parts: plan.parts.map((x) => ({ ...x, speed: x.speed * k })), ph });
+        busy[ph] += need / k + 0.5;
+      }
+      const id = typeof cat.id === "number" ? cat.id : hashId(String(cat.id));
+      if (legs.length) this.day.push({ id, legs, coat, fit, accent, carColor });
+    }
+  }
+
+  private dayLeg(from: number | null, to: number | null, mode: string, route: number | null, rng: Rng): { parts: DayPart[] } | null {
+    const spot = (b: number | null, outward: boolean) => {
+      if (this.validBlock(b)) return this.sidewalkSpot(b, rng);
+      // outside town: the ring-road point toward downtown
+      let best = this.outer[0];
+      for (const q of this.outer) if (q.x * this.downtownDir.x + q.y * this.downtownDir.y > best.x * this.downtownDir.x + best.y * this.downtownDir.y) best = q;
+      const far = add(best, mul(this.downtownDir, outward ? 3 : 3));
+      return { p: far, nodes: [this.nearestNode(best)] };
+    };
+    const A = spot(from, false), B = spot(to, true);
+    const parts: DayPart[] = [];
+    const part = (kind: DayPart["kind"], pts: V2[], speed: number, extra: Partial<DayPart> = {}) => {
+      if (pts.length < 2) return;
+      const L = polylineLength(pts);
+      if (L > 0.01) parts.push({ kind, pts, L, speed, ...extra });
+    };
+    if (mode === "car") {
+      part("car", [A.p, ...this.nodePoints(this.streetPath(A.nodes, B.nodes)), B.p], 1.6);
+    } else if ((mode === "metro" || mode === "subway") && this.station !== null && this.stationSpots.has(this.station)) {
+      const st = this.stationSpots.get(this.station)!;
+      const sn = this.blockCorners[this.station];
+      // walk to the station and go underground; or come up out of it and walk on
+      if (this.validBlock(from)) part("walk", [A.p, ...this.nodePoints(this.streetPath(A.nodes, sn)), st], 0.9);
+      if (this.validBlock(to)) part("walk", [st, ...this.nodePoints(this.streetPath(sn, B.nodes)), B.p], 0.9, { underFirst: !this.validBlock(from) });
+    } else if (mode === "bus" && route !== null && this.routes[route]) {
+      const path = this.routes[route].path;
+      const bi = this.nearestOnRoute(path, A.nodes), ai = this.nearestOnRoute(path, B.nodes);
+      const stopA = this.pts[path[bi]], stopB = this.pts[path[ai]];
+      part("walk", [A.p, ...this.nodePoints(this.streetPath(A.nodes, [path[bi]]))], 0.9);
+      parts.push({ kind: "ride", pts: [stopA, stopB], L: 0, speed: 1, route, board: stopA, alight: stopB });
+      part("walk", [stopB, ...this.nodePoints(this.streetPath([path[ai]], B.nodes)), B.p], 0.9);
+    } else {
+      part("walk", [A.p, ...this.nodePoints(this.streetPath(A.nodes, B.nodes)), B.p], 0.9);
+    }
+    return parts.length ? { parts } : null;
+  }
+
+  /** Where bus `b` is at time t (the same motion the buses are drawn with). */
+  private busAt(b: Bus, t: number): { at: V2; dir: V2 } {
+    const path = this.routePaths[b.route];
+    const L = polylineLength(path);
+    const v = 1.3, pause = 1.5, run = L / v;
+    const P = 2 * run + 2 * pause;
+    const u = (((t + b.phase * P) % P) + P) % P;
+    let s = 0, back = false;
+    if (u < run) s = u * v;
+    else if (u < run + pause) s = L;
+    else if (u < 2 * run + pause) { s = L - (u - run - pause) * v; back = true; }
+    const a = along(path, s);
+    return { at: a.at, dir: back ? mul(a.dir, -1) : a.dir };
+  }
+  private busCache = new Map<string, { on: number; off: number } | null>();
+  /** The next bus on `route` that stops at `board` after time t0, and when it reaches `alight`. */
+  private catchBus(route: number, board: V2, alight: V2, t0: number, key: string): { on: number; off: number } | null {
+    if (this.busCache.has(key)) return this.busCache.get(key)!;
+    const buses = this.buses.filter((b) => b.route === route);
+    let best: { on: number; off: number } | null = null;
+    for (const b of buses) {
+      let on = -1;
+      for (let t = t0; t < t0 + 40; t += 0.1) if (dist(this.busAt(b, t).at, board) < 0.4) { on = t; break; }
+      if (on < 0) continue;
+      let off = -1;
+      for (let t = on + 0.5; t < on + 60; t += 0.1) if (dist(this.busAt(b, t).at, alight) < 0.4) { off = t; break; }
+      if (off < 0) continue;
+      if (!best || on < best.on) best = { on, off };
+    }
+    this.busCache.set(key, best);
+    if (this.busCache.size > 4000) this.busCache.clear();
+    return best;
+  }
+
+  private drawDay(t: number, person: (pos: V2, y: number, heading: number, k: number, sway: number, accent: THREE.Color, coat: Coat, fit: Outfit, pose: { swing: number }) => void,
+    drawCar: (pos: V2, dir: V2, k: number, color: THREE.Color, fur: THREE.Color) => void, walkPose: (ph: number, amp?: number) => { swing: number }) {
+    const D = Transit.DAY;
+    const rel = t - this.dayStart;
+    const cycle = Math.floor(rel / D), u = rel - cycle * D;
+    const base = this.dayStart + cycle * D;
+    for (const c of this.day) {
+      for (const [li, lg] of c.legs.entries()) {
+        if (u < lg.t0) continue;
+        let tt = base + lg.t0; // absolute time the current part starts
+        let drawn = false, done = false;
+        for (const [pi, part] of lg.parts.entries()) {
+          if (part.kind === "ride") {
+            const ride = this.catchBus(part.route!, part.board!, part.alight!, tt, `${c.id}:${li}:${pi}:${cycle}`);
+            if (!ride) { done = true; break; }
+            if (t < ride.on) { // waiting at the stop
+              person(part.board!, this.groundAt(part.board!), 0, 1, 0, c.accent, c.coat, c.fit, { swing: 0 });
+              drawn = true; break;
+            }
+            if (t < ride.off) { drawn = true; break; } // on the bus (hidden)
+            tt = ride.off;
+            continue;
+          }
+          const dur = part.L / part.speed;
+          if (t < tt + dur) {
+            const s = (t - tt) * part.speed;
+            const at = along(part.pts, s);
+            if (part.kind === "car") {
+              drawCar(add(at.at, mul(v2(-at.dir.y, at.dir.x), -0.1)), at.dir, Math.min(1, s / 0.3, (part.L - s) / 0.3), c.carColor, c.coat.fur);
+            } else {
+              const fade = Math.min(1, s / 0.25, (part.L - s) / 0.25);
+              const pos = add(at.at, mul(v2(-at.dir.y, at.dir.x), ((c.id % 5) - 2) * 0.05));
+              person(pos, this.groundAt(pos), Math.atan2(at.dir.x, -at.dir.y), fade, 0, c.accent, c.coat, c.fit, walkPose((t + c.id) * 10));
+            }
+            drawn = true; break;
+          }
+          tt += dur;
+        }
+        if (drawn || done) break;
+      }
     }
   }
 
@@ -697,20 +909,11 @@ export class Transit {
   // ---------- per frame ----------
 
   update(t: number) {
+    this.now = t;
     for (const b of this.buses) {
       if (!b.obj.visible) continue;
-      const path = this.routePaths[b.route];
-      const L = polylineLength(path);
-      const v = 1.3, pause = 1.5, run = L / v;
-      const P = 2 * run + 2 * pause;
-      const u = (((t + b.phase * P) % P) + P) % P;
-      let s = 0, back = false;
-      if (u < run) s = u * v;
-      else if (u < run + pause) s = L;
-      else if (u < 2 * run + pause) { s = L - (u - run - pause) * v; back = true; }
-      const a = along(path, s);
-      const dir = back ? mul(a.dir, -1) : a.dir;
-      b.obj.position.set(a.at.x, this.bridgeHeight(a.at) ?? 0.05, -a.at.y);
+      const { at, dir } = this.busAt(b, t);
+      b.obj.position.set(at.x, this.bridgeHeight(at) ?? 0.05, -at.y);
       b.obj.rotation.y = Math.atan2(dir.y, dir.x);
     }
 
@@ -791,6 +994,29 @@ export class Transit {
       else if (fit.hat === 2) put("pillbox", accent);
     };
     const walkPose = (ph: number, amp = 0.55): Pose => ({ swing: Math.sin(ph) * amp });
+    const drawCar = (pos: V2, dir: V2, k: number, color: THREE.Color, fur: THREE.Color) => {
+      if (nc >= MAX_CARS) return;
+      e.set(0, Math.atan2(dir.y, dir.x), 0); q.setFromEuler(e);
+      m.compose(p.set(pos.x, (this.bridgeHeight(pos) ?? 0.02) + 0.005, -pos.y), q, sc.set(k, k, k));
+      this.cars.setMatrixAt(nc, m); this.cars.setColorAt(nc, color);
+      this.cabins.setMatrixAt(nc, m); this.wheels.setMatrixAt(nc, m);
+      this.drivers.setMatrixAt(nc, m); this.drivers.setColorAt(nc, fur);
+      nc++;
+    };
+    // street traffic from Lean's numbers: cars looping on busy segments
+    for (const c of this.traffic) {
+      const L = dist(c.a, c.b);
+      const u = (((t * 0.9 + c.ph) % (2 * L)) + 2 * L) % (2 * L);
+      const fwd = u < L;
+      const s2 = fwd ? u : 2 * L - u;
+      const d = norm(sub(c.b, c.a));
+      const dir = fwd ? d : mul(d, -1);
+      const pos = add(add(c.a, mul(d, s2)), mul(v2(-dir.y, dir.x), -0.1));
+      const k = Math.min(1, s2 / 0.3, (L - s2) / 0.3);
+      drawCar(pos, dir, Math.max(0.001, k), c.color, c.fur);
+    }
+    // Lean's simulated day
+    if (this.day.length) this.drawDay(t, person, drawCar, walkPose);
     for (const w of this.walkers) {
       const cycle = w.T + 3;
       let u = (t + w.phase) % cycle;
@@ -805,12 +1031,7 @@ export class Transit {
       const k = w.demo ? 1 : Math.min(1, s / 0.25, (leg.L - s) / 0.25);
       const heading = Math.atan2(at.dir.x, -at.dir.y);
       if (w.car) {
-        if (nc >= MAX_CARS) continue;
-        e.set(0, Math.atan2(at.dir.y, at.dir.x), 0); q.setFromEuler(e);
-        m.compose(p.set(pos.x, 0.05, -pos.y), q, sc.set(k, k, k));
-        this.cars.setMatrixAt(nc, m); this.cars.setColorAt(nc, w.color);
-        this.cabins.setMatrixAt(nc, m);
-        nc++;
+        drawCar(pos, at.dir, k, w.color, w.coat.fur);
       } else {
         person(pos, OLD_GROUND ? 0.05 : this.groundAt(pos), heading, k, 0, w.color, w.coat, w.fit, walkPose((t + w.phase) * (w.fit.kid ? 14 : 10)));
       }
@@ -909,12 +1130,18 @@ export class Transit {
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
     }
     this.bodies.count = np; this.heads.count = np; this.eyes.count = np; this.cheeks.count = np; this.outline.count = np;
-    this.cars.count = nc; this.cabins.count = nc;
-    for (const im of [this.bodies, this.heads, this.cars, this.cabins, this.eyes, this.cheeks, this.outline]) {
+    this.cars.count = nc; this.cabins.count = nc; this.wheels.count = nc; this.drivers.count = nc;
+    for (const im of [this.bodies, this.heads, this.cars, this.cabins, this.wheels, this.drivers, this.eyes, this.cheeks, this.outline]) {
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
     }
   }
+}
+
+function hashId(s: string): number {
+  let h = 7;
+  for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 100000;
 }
 
 function offsetPolyline(p: V2[], d: number): V2[] {
