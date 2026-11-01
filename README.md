@@ -91,3 +91,17 @@ Axioms used: `propext`, `Classical.choice`, `Quot.sound` only. No `sorry`, no
 - Branch-and-bound solver (DESIGN.md §8.4) for full 9-block puzzles without
   fixed blocks.
 - Generator quick check, gap check and the "culture matters" filter.
+
+## Kernel check (`lake check`)
+
+Run on commit 17fb0ed in a Linux container (`Checks/lakecheck.sh`):
+
+```sh
+docker run --rm --privileged -v "$PWD":/work -v sbelan:/root/.elan ubuntu:24.04 bash /work/Checks/lakecheck.sh
+```
+
+`lake check` rebuilds the project in a sandbox and replays every declaration through
+the kernel; `--paranoid` also replays it through five independent checkers. Result:
+all six accepted (Lean kernel, Lean paranoid kernel, lean4lean, nanoda, con-leche,
+con-ron; about 92,900 declarations). Axioms used: `propext`, `Quot.sound`,
+`Classical.choice` only.
