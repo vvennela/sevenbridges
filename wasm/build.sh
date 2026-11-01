@@ -20,6 +20,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 W=${SB_WASM_WORK:-/tmp/sevenbridges-wasm}
 LEAN_VERSION=4.35.0
 LIBUV_VERSION=1.48.0
+MIMALLOC_VERSION=3.4.5
 EMSDK_VERSION=4.0.10
 case "$(uname -m)" in arm64|aarch64) EMSDK_IMAGE=${EMSDK_IMAGE:-emscripten/emsdk:$EMSDK_VERSION-arm64} ;;
   *) EMSDK_IMAGE=${EMSDK_IMAGE:-emscripten/emsdk:$EMSDK_VERSION} ;; esac
@@ -35,6 +36,10 @@ fi
 if [ ! -f "$W/libuv/CMakeLists.txt" ]; then
   curl -sSL "https://codeload.github.com/libuv/libuv/tar.gz/refs/tags/v$LIBUV_VERSION" -o "$W/libuv.tar.gz"
   mkdir -p "$W/libuv" && tar xzf "$W/libuv.tar.gz" -C "$W/libuv" --strip-components=1
+fi
+if [ ! -f "$W/mimalloc/src/static.c" ]; then
+  curl -sSL "https://codeload.github.com/microsoft/mimalloc/tar.gz/refs/tags/v$MIMALLOC_VERSION" -o "$W/mimalloc.tar.gz"
+  mkdir -p "$W/mimalloc" && tar xzf "$W/mimalloc.tar.gz" -C "$W/mimalloc" --strip-components=1
 fi
 cp "$TC/include/lean/version.h" "$W/version.h"
 cp "$HERE/glue.c" "$HERE/emcc.sh" "$W/"

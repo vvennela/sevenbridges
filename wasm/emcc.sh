@@ -6,6 +6,7 @@
 # Layout of $W (mounted at /work):
 #   lean4/   Lean v4.35.0 source (runtime and headers)
 #   libuv/   libuv v1.48.0 source
+#   mimalloc/ mimalloc v3.4.5 source (the allocator Lean 4.35.0 uses)
 #   c/       C files of every Lean module (core library closure + this project)
 #   glue.c   the JavaScript-facing entry points
 set -euo pipefail
@@ -13,15 +14,21 @@ W=${W:-/work}
 J=${JOBS:-$(nproc)}
 OPT=${OPT:--O3}
 cd "$W"
-mkdir -p gen/lean obj/rt obj/c out
+mkdir -p gen/lean out
 
-# config.h as Lean's CMake writes it, but without mimalloc (Lean's own allocator,
-# single-threaded) and for the Emscripten target.
-cat > gen/lean/config.h <<'EOF'
+# config.h as Lean's CMake writes it (with mimalloc, as in the native build).
+cat > gen/config.h.new <<'EOF'
 #pragma once
 #include <lean/version.h>
+#define LEAN_MIMALLOC
 #define LEAN_IS_STAGE0 0
 EOF
+echo "// OPT=$OPT" >> gen/config.h.new
+# Everything depends on config.h and the flags: start over when they change.
+if ! cmp -s gen/config.h.new gen/config.stamp; then rm -rf obj; cp gen/config.h.new gen/config.stamp; fi
+cp gen/config.h.new gen/lean/config.h
+cp mimalloc/include/mimalloc.h gen/lean/mimalloc.h
+mkdir -p obj/rt obj/c
 sed 's/^#define LEAN_PLATFORM_TARGET .*/#define LEAN_PLATFORM_TARGET "wasm32-unknown-emscripten"/' \
   "$W/version.h" > gen/lean/version.h
 echo '#define LEAN_GITHASH ""' > gen/githash.h
@@ -44,6 +51,10 @@ RT=(debug thread mpz utf8 object apply exception interrupt memory stackinfo comp
     hash byteslice platform alloc allocprof sharecommon stack_overflow process object_ref mpn mutex
     libuv uv/net_addr uv/event_loop uv/timer uv/tcp uv/udp uv/dns uv/system uv/signal openssl)
 RTFLAGS="$OPT $COMMON -std=c++20 -DLEAN_EXPORTING -Wno-everything -I gen -I lean4/src -I lean4/src/include -I libuv/include"
+# mimalloc, compiled together with Lean's allocation entry point (runtime/mimalloc.cpp),
+# with the options of Lean's runtime/CMakeLists.txt.
+[ -f obj/rt/mimalloc.o ] || em++ $RTFLAGS -I mimalloc/include -I mimalloc/src -DMI_SHARED_LIB -DMI_SHARED_LIB_EXPORT \
+  -DMI_WIN_NOREDIRECT -DMI_MAX_ALIGN_SIZE=8 -DMI_SECURE=0 -c lean4/src/runtime/mimalloc.cpp -o obj/rt/mimalloc.o
 printf '%s\n' "${RT[@]}" | xargs -P "$J" -I{} bash -c '
   o=obj/rt/$(echo {} | tr / _).o
   [ "$o" -nt lean4/src/runtime/{}.cpp ] || em++ '"$RTFLAGS"' -c lean4/src/runtime/{}.cpp -o "$o"'
@@ -74,7 +85,7 @@ link() {
     -sSTACK_SIZE=${STACK:-64MB} -sINITIAL_MEMORY=${MEM:-256MB} -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXIT_RUNTIME=0 -sFILESYSTEM=1
 }
-: > roots.txt
+: > roots.txt; rm -f xobjs.txt
 for round in 1 2 3 4 5 6 7 8; do
   if link > link.log 2>&1; then break; fi
   sed -n 's/.*undefined symbol: //p' link.log | sort -u > undef.txt
