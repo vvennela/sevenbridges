@@ -24,3 +24,9 @@ root = "Checks.Diff"
 [[lean_exe]]
 name = "genstats"
 root = "Checks.GenStats"
+
+# The browser build's entry point (see wasm/README.md). Not built by default;
+# `wasm/build.sh` asks Lake for the C files of its modules.
+[[lean_lib]]
+name = "Wasm"
+roots = ["Wasm"]
