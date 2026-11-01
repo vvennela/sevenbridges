@@ -75,6 +75,8 @@ instance : FromJson Solution where
     return { build, routesOn, station, bridges }
 deriving instance ToJson for Trip
 deriving instance ToJson for RouteReport
+deriving instance ToJson for StopReport
+deriving instance ToJson for BusReport
 deriving instance ToJson for ResidentReport
 deriving instance ToJson for GroupChange
 deriving instance ToJson for BlockReport

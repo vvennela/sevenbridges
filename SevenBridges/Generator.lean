@@ -99,32 +99,59 @@ def allHeights (kind : Height → Building) : List Building := [kind .one, kind 
 def riverSegments (m : RoadMap) : List Nat :=
   (List.range m.segments.length).filter fun i => (m.segments.getD i default).terrain == .stream
 
-/-- Up to `most` bridge sites: first the river segments some route drives
-along (so the route can run), then random others. -/
+/-- Bridge sites: every river segment some route drives along (so every route
+can run), then random others up to `most` sites in all. Never more than 7. -/
 def chooseBridgeSites (r : Rng) (m : RoadMap) (routes : List Route) (most : Nat) : List Nat × Rng :=
   let river := riverSegments m
   let used := river.filter fun i => routes.any fun rt => rt.sides.contains (m.segments.getD i default).side
   let (others, r) := r.choose (river.filter (· ∉ used)) (most - min most used.length)
-  ((used ++ others).take most |>.mergeSort (· ≤ ·), r)
+  ((used ++ others).take 7 |>.mergeSort (· ≤ ·), r)
 
-/-- Most bridge sites a generated puzzle offers. -/
-def maxBridgeSites : Nat := 3
+/-- Puzzle sizes. The size sets how much choice a puzzle offers, so that the
+proven solver finishes in time (DESIGN.md §8.6). -/
+inductive Size
+  /-- 6 blocks or fewer: every height, up to 3 bridge sites. -/
+  | easy
+  /-- 7 blocks: every height, one of shops, bars and parks left out, up to 2
+  bridge sites. -/
+  | medium
+  /-- 8 or 9 blocks: buildings up to 2 stories (shops 1), one of shops, bars
+  and parks left out, 1 bridge site (more if routes cross the river). -/
+  | hard
+deriving Repr, DecidableEq
 
-/-- A random puzzle on a map (budget not set yet). Every block is open, every
-height is allowed for the kinds the puzzle offers, and the station may go on any
-block. Each puzzle leaves out at most one of shops, bars and parks, for variety. -/
+def Size.ofBlocks (n : Nat) : Size :=
+  if n ≤ 6 then .easy else if n = 7 then .medium else .hard
+
+/-- Most bridge sites a puzzle of this size offers. -/
+def Size.bridgeSites : Size → Nat
+  | .easy => 3
+  | .medium => 2
+  | .hard => 1
+
+/-- The heights a puzzle of this size offers for a building kind. -/
+def Size.heights (sz : Size) (kind : Height → Building) : List Building :=
+  if sz = .hard then [kind .one, kind .two] else allHeights kind
+
+/-- A random puzzle on a map (budget not set yet). The station may go on any
+block. Each puzzle leaves out at most one of shops, bars and parks, for
+variety. No block is already built. Bigger maps offer less choice (`Size`):
+fewer bridge sites, and on the biggest maps lower buildings. -/
 def randomPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) :
     Puzzle × Rng :=
   let n := m.blockCount
-  let extras : List (List Building) := [allHeights .shop, [.bar], [.park]]
-  let (drop, r) := r.below 4   -- 3 means "leave nothing out"
+  let sz := Size.ofBlocks n
+  let extras : List (List Building) :=
+    [if sz = .hard then [.shop .one] else allHeights .shop, [.bar], [.park]]
+  -- 3 means "leave nothing out"; medium and hard puzzles always leave one out.
+  let (drop, r) := r.below (if sz = .easy then 4 else 3)
   let kept := (List.range 3).filterMap fun i => if i = drop then none else extras[i]?
-  let allowed := allHeights .housing ++ allHeights .office ++ kept.flatten
+  let allowed := sz.heights .housing ++ sz.heights .office ++ kept.flatten
   let (names, r) := r.choose groupNames 2
   let (split, r) := r.pick shares
   let (g1, r) := randomGroup r (names.getD 0 "Families") split.1
   let (g2, r) := randomGroup r (names.getD 1 "Students") split.2
-  let (bridgeSites, r) := chooseBridgeSites r m routes maxBridgeSites
+  let (bridgeSites, r) := chooseBridgeSites r m routes sz.bridgeSites
   ({ name, map := m, allowed, fixed := [], routes,
      stationSites := List.range n, bridgeSites, groups := [g1, g2],
      budget := 0 }, r)
@@ -208,17 +235,18 @@ theorem judge_steps_le (p : Puzzle) (fuel : Nat) : (judge p fuel).2 ≤ fuel := 
   simp only
   split <;> simp only <;> omega
 
-/-- Keep a puzzle whose best layout uses transit and beats greedy play clearly.
+/-- Keep a puzzle whose best layout uses transit, has homes, and beats greedy
+play clearly.
 (Ties for the best are allowed: on near-symmetric maps, mirror-image layouts
 often tie, and the rating only compares scores.) -/
-def Verdict.accepted (v : Verdict) : Bool := v.usesTransit && v.hard
+def Verdict.accepted (v : Verdict) : Bool := v.usesTransit && v.hard && v.best.build.any (·.isHousing)
 
 /-! ## The generator, with a step budget -/
 
 /-- Most steps one attempt may take. -/
-def attemptFuel : Nat := 600000
+def attemptFuel : Nat := 900000
 /-- Most steps the whole generator may take. -/
-def generatorStepBudget : Nat := 1000000
+def generatorStepBudget : Nat := 1800000
 /-- Most attempts. -/
 def maxAttempts : Nat := 40
 
@@ -237,12 +265,13 @@ def attemptPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) 
   let (margin, r) := r.below 6
   ({ p with budget := costOf p planted + 10 * margin }, r)
 
-/-- Try up to `fuel` more attempts, with `left` steps of work left. -/
-def loop (m : RoadMap) (routes : List Route) (name : String) :
+/-- Try up to `fuel` more attempts, with `left` steps of work left. Each attempt
+makes a puzzle with `attempt`. -/
+def loop (attempt : Rng → Puzzle × Rng) :
     Nat → Rng → Nat → Nat → Nat → Result
   | 0, _, _, attempts, work => { puzzle := none, verdict := none, attempts, work }
   | fuel + 1, r, left, attempts, work =>
-    let (p, r) := attemptPuzzle r m routes name
+    let (p, r) := attempt r
     let g := greedyCount p
     if g + 1 > left then
       -- Not enough work left for another attempt: stop.
@@ -254,25 +283,25 @@ def loop (m : RoadMap) (routes : List Route) (name : String) :
       | some v =>
         if v.accepted then
           { puzzle := some p, verdict := some v, attempts := attempts + 1, work := work + cost }
-        else loop m routes name fuel r (left - cost) (attempts + 1) (work + cost)
-      | none => loop m routes name fuel r (left - cost) (attempts + 1) (work + cost)
+        else loop attempt fuel r (left - cost) (attempts + 1) (work + cost)
+      | none => loop attempt fuel r (left - cost) (attempts + 1) (work + cost)
 
 /-- Generate a puzzle on map `m` with bus routes `routes`, from a seed. -/
 def generate (m : RoadMap) (routes : List Route) (name : String) (seed : Nat) : Result :=
-  loop m routes name maxAttempts ⟨seed⟩ generatorStepBudget 0 0
+  loop (attemptPuzzle · m routes name) maxAttempts ⟨seed⟩ generatorStepBudget 0 0
 
 /-! ## The generator's work is bounded -/
 
-theorem loop_work_le (m : RoadMap) (routes : List Route) (name : String) :
+theorem loop_work_le (attempt : Rng → Puzzle × Rng) :
     ∀ (fuel : Nat) (r : Rng) (left attempts work : Nat),
-      (loop m routes name fuel r left attempts work).work ≤ work + left := by
+      (loop attempt fuel r left attempts work).work ≤ work + left := by
   intro fuel
   induction fuel with
   | zero => intro r left attempts work; simp [loop]
   | succ fuel ih =>
     intro r left attempts work
     simp only [loop]
-    generalize attemptPuzzle r m routes name = x
+    generalize attempt r = x
     obtain ⟨p, r'⟩ := x
     simp only
     by_cases hg : greedyCount p + 1 > left
@@ -292,7 +321,7 @@ theorem loop_work_le (m : RoadMap) (routes : List Route) (name : String) :
 /-- **The generator never takes more than `generatorStepBudget` steps.** -/
 theorem generate_work_le (m : RoadMap) (routes : List Route) (name : String) (seed : Nat) :
     (generate m routes name seed).work ≤ generatorStepBudget := by
-  have := loop_work_le m routes name maxAttempts ⟨seed⟩ generatorStepBudget 0 0
+  have := loop_work_le (attemptPuzzle · m routes name) maxAttempts ⟨seed⟩ generatorStepBudget 0 0
   simpa [generate] using this
 
 end Generator

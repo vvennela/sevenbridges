@@ -667,25 +667,28 @@ theorem workers_le_info (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.gr
   simp only [Plan.blockInfo, hP.1]
   exact workers_le P.c P.group T hT spot look hspot k hk
 
+theorem reached_of (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
+    (spot : Nat → Spot) (opts : Nat → List Building) (k : Nat) (hk : k < P.c.puzzle.blockCount) :
+    T.stationReaches P.c k = true → (P.blockInfo spot opts k).reached = true := by
+  intro h
+  simp only [Plan.blockInfo, hP.1, Lines.make]
+  rw [getD_ofFn _ _ _ hk]
+  exact (covers_any_all P.group (fun T => T.stationReaches P.c k) T hT).2 h
+
 /-- Productivity on block `k` is at most `jobsCap`. -/
 theorem productivity_le (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
     (spot : Nat → Spot) (opts : Nat → List Building) (look : Nat → Building)
     (hspot : ∀ j, (spot j).Admits (look j)) (k : Nat) (hk : k < P.c.puzzle.blockCount) :
     blockProductivity P.c T look k ≤ jobsCap (P.blockInfo spot opts k) (look k) := by
   have hW := workers_le_info P hP T hT spot opts look hspot k hk
-  have hR : T.stationReaches P.c k = true → (P.blockInfo spot opts k).reached = true := by
-    intro h
-    simp only [Plan.blockInfo, hP.1, Lines.make]
-    rw [getD_ofFn _ _ _ hk]
-    exact (covers_any_all P.group (fun T => T.stationReaches P.c k) T hT).2 h
+  have hR := reached_of P hP T hT spot opts k hk
   have hfill : jobsFilled P.c T look k ≤
-      (if (P.blockInfo spot opts k).reached then (look k).jobs
-       else min (look k).jobs (P.blockInfo spot opts k).workers) := by
-    unfold jobsFilled
+      min (look k).jobs ((P.blockInfo spot opts k).workers
+        + if (P.blockInfo spot opts k).reached then stationWorkersPerBlock else 0) := by
+    unfold jobsFilled stationWorkersAt
     by_cases h : T.stationReaches P.c k = true
-    · simp [h, hR h]
-    · simp only [h, Bool.false_eq_true, ite_false]
-      by_cases hr : (P.blockInfo spot opts k).reached = true <;> simp only [hr, ite_true, Bool.false_eq_true, ite_false] <;> omega
+    · simp only [h, hR h, ite_true]; omega
+    · simp only [h, Bool.false_eq_true, ite_false]; split <;> omega
   have hoff : ((T.neighborsOf P.c k).filter fun j => (look j).isOffice).length
       ≤ (P.blockInfo spot opts k).offices := by
     simp only [Plan.blockInfo, hP.1, Lines.make]
@@ -715,9 +718,14 @@ theorem sales_le (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
     (hspot : ∀ j, (spot j).Admits (look j)) (k : Nat) (hk : k < P.c.puzzle.blockCount) :
     blockSales P.c T look k ≤ salesCap (P.blockInfo spot opts k) (look k) := by
   have hW := workers_le_info P hP T hT spot opts look hspot k hk
+  have hR := reached_of P hP T hT spot opts k hk
   unfold blockSales salesCap
   cases look k with
-  | shop h => exact Nat.mul_le_mul_left _ (by omega)
+  | shop h =>
+    apply Nat.mul_le_mul_left
+    by_cases h' : T.stationReaches P.c k = true
+    · simp only [h', hR h', ite_true]; omega
+    · simp only [h', Bool.false_eq_true, ite_false]; split <;> omega
   | _ => simp
 
 /-- **One block's value is at most its cap.** -/
@@ -790,7 +798,7 @@ theorem blockValue_congr (c : Context) (T : Transit) (look look' : Nat → Build
       apply List.filter_congr
       intro j hj; rw [h j (mem_watched_of_neighbor c T k j hj)]
     rw [hk, h1]
-  unfold blockValue blockHappiness blockProductivity blockSales blockCrime jobsFilled
+  unfold blockValue blockHappiness blockProductivity blockSales blockCrime jobsFilled stationWorkersAt
   simp only [hk, hf, hw, hoff]
 
 theorem seenFrom_agrees (c : Context) (T : Transit) (k : Nat) (look : Nat → Building) :
@@ -850,7 +858,7 @@ theorem picks_cons {α : Type} {x : α} {xs : List α} {opts : List α} {vals : 
 knapsack's answer. -/
 theorem knapsack_ge (units : Nat) :
     ∀ (vals : List (List (Int × Nat))) (xs : List (Int × Nat)) (r : Nat), Picks xs vals → r ≤ units →
-      (xs.map (·.2 / 10)).sum ≤ r →
+      (xs.map (·.2 / 30)).sum ≤ r →
       (xs.map (·.1)).sum ≤ (vals.foldr (knapsackRow units) (Array.replicate (units + 1) 0)).getD r impossible
   | [], xs, r, h, hr, _ => by
     have : xs = [] := by cases xs <;> simp_all [Picks]
@@ -861,17 +869,17 @@ theorem knapsack_ge (units : Nat) :
   | opts :: vals, x :: xs, r, h, hr, hsum => by
     obtain ⟨hx, hxs⟩ := picks_cons h
     simp only [List.map_cons, List.sum_cons] at hsum ⊢
-    have ih := knapsack_ge units vals xs (r - x.2 / 10) hxs (by omega) (by omega)
+    have ih := knapsack_ge units vals xs (r - x.2 / 30) hxs (by omega) (by omega)
     rw [List.foldr_cons]
     unfold knapsackRow
     rw [getD_ofFn _ _ _ (by omega)]
     refine Int.le_trans ?_ (mem_le_foldl_if_max
-      (fun y => y.1 + (vals.foldr (knapsackRow units) (Array.replicate (units + 1) 0)).getD (r - y.2 / 10) impossible)
-      (fun y => y.2 / 10 ≤ r) opts impossible x hx (by omega))
+      (fun y => y.1 + (vals.foldr (knapsackRow units) (Array.replicate (units + 1) 0)).getD (r - y.2 / 30) impossible)
+      (fun y => y.2 / 30 ≤ r) opts impossible x hx (by omega))
     omega
 
 theorem sum_div_le {α : Type} (f : α → Nat) :
-    ∀ l : List α, (l.map fun x => f x / 10).sum ≤ (l.map f).sum / 10
+    ∀ l : List α, (l.map fun x => f x / 30).sum ≤ (l.map f).sum / 30
   | [] => by simp
   | x :: xs => by
     have := sum_div_le f xs
@@ -1067,18 +1075,17 @@ theorem stationRiders_le (c : Context) (T : Transit) (opts : List (List Building
         simp only [Nat.zero_add]
         apply sum_filter_le _ _ _ _ _ (fun _ _ h => h)
         intro h _; exact leastOf_le _ _ _ (hopts h)
-      have hsw : stationWorkersAt c T look j ≤ (look j).jobs -
+      have hsw : stationWorkersAt c T look j ≤ min stationWorkersPerBlock ((look j).jobs -
           (c.blocks.filter (T.canReach c j)).foldl
-            (fun t h => t + leastOf Building.residents (opts.getD h [.empty])) 0 := by
+            (fun t h => t + leastOf Building.residents (opts.getD h [.empty])) 0) := by
         unfold stationWorkersAt
         simp only [hr, ite_true]
-        have := Nat.min_le_left (look j).jobs (workersFor c T look j)
         omega
       have hmem := hopts j
       generalize (c.blocks.filter (T.canReach c j)).foldl
             (fun t h => t + leastOf Building.residents (opts.getD h [.empty])) 0 = F at hsw ⊢
       generalize look j = b at hmem hsw ⊢
-      refine Nat.le_trans ?_ (mem_le_foldl_max_nat (fun b => b.jobs - F + shoppersAt b) _ 0 b hmem)
+      refine Nat.le_trans ?_ (mem_le_foldl_max_nat (fun b => min stationWorkersPerBlock (b.jobs - F) + shoppersAt b) _ 0 b hmem)
       omega
     · exact Nat.le_refl _
 

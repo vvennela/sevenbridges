@@ -190,25 +190,39 @@ function addRiver(m, r) {
   for (const s of chain) s.terrain = "stream";
 }
 
-/** Shortest street path between intersections a and b (Dijkstra). A river
-segment counts double: a bus can use it only over a bridge, so routes take it
-only as a real shortcut. */
+/** Shortest street path between intersections a and b (Dijkstra). A bus
+crosses the river only by driving along a river segment (where a bridge can be
+built): it never passes through a point on the river on two land segments.
+River segments count double, so routes cross only when it is a real shortcut. */
 export function streetPath(m, a, b) {
   const len = (s) => Math.floor(Math.hypot(m.points[s.a].x - m.points[s.b].x, m.points[s.a].y - m.points[s.b].y))
     * (s.terrain === "stream" ? 2 : 1);
-  const dist = m.points.map(() => Infinity), prev = m.points.map(() => -1), done = new Set();
-  dist[a] = 0;
-  while (done.size < m.points.length) {
+  const onRiver = new Set();
+  for (const s of m.segments) if (s.terrain === "stream") { onRiver.add(s.a); onRiver.add(s.b); }
+  // State: point, and whether we arrived along a river segment (0/1).
+  const key = (v, w) => 2 * v + w;
+  const n2 = 2 * m.points.length;
+  const dist = new Array(n2).fill(Infinity), prev = new Array(n2).fill(-1), done = new Set();
+  dist[key(a, 1)] = 0; // the start may leave on land or water
+  while (done.size < n2) {
     let u = -1;
-    m.points.forEach((_, i) => { if (!done.has(i) && (u < 0 || dist[i] < dist[u])) u = i; });
-    if (dist[u] === Infinity) break;
+    for (let i = 0; i < n2; i++) if (!done.has(i) && (u < 0 || dist[i] < dist[u])) u = i;
+    if (u < 0 || dist[u] === Infinity) break;
     done.add(u);
+    const pu = u >> 1, wet = u & 1;
     for (const s of m.segments) {
-      const v = s.a === u ? s.b : s.b === u ? s.a : -1;
-      if (v >= 0 && dist[u] + len(s) < dist[v]) { dist[v] = dist[u] + len(s); prev[v] = u; }
+      const v = s.a === pu ? s.b : s.b === pu ? s.a : -1;
+      if (v < 0) continue;
+      const water = s.terrain === "stream" ? 1 : 0;
+      // Land in, land out at a river point would cross the water without a bridge.
+      if (onRiver.has(pu) && pu !== a && !wet && !water) continue;
+      const k = key(v, water);
+      if (dist[u] + len(s) < dist[k]) { dist[k] = dist[u] + len(s); prev[k] = u; }
     }
   }
-  const p = []; for (let v = b; v >= 0; v = prev[v]) p.unshift(v);
+  const end = dist[key(b, 0)] <= dist[key(b, 1)] ? key(b, 0) : key(b, 1);
+  if (dist[end] === Infinity) return [a];
+  const p = []; for (let k = end; k >= 0; k = prev[k]) p.unshift(k >> 1);
   return p;
 }
 

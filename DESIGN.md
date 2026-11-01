@@ -21,8 +21,8 @@ Items marked **[ASSUMED]** are placeholders. Change them freely.
 4. **The rules are readable.** A player or reviewer can read the score rules in
    plain words, and the Lean definitions match those words.
 
-Not in the first version: terrain (streams, bridges, hills), footpaths,
-energy, trams.
+Not in this version: hills, footpaths, energy, trams. (A river and bridges
+are in: §2.4.)
 
 ---
 
@@ -35,7 +35,8 @@ Each intersection has whole-number x, y coordinates.
 
 - A **block** is an area enclosed by roads. It is given by the loop of
   intersections around its edge. A neighborhood has **5–9 blocks**.
-- Two blocks are **neighbors** if they share a road segment.
+- Two blocks are **neighbors** if they share a road segment on land, or a
+  river segment with a bridge built on it (§2.4).
 - A segment's **length** is the distance between its two ends, rounded to a
   whole number **[ASSUMED]**.
 - A few intersections on the ring road are **gateways**, where outside buses
@@ -46,7 +47,8 @@ Lean checks every map before using it:
 - each block's edge is a closed loop of real road segments,
 - each inner segment borders exactly two blocks, and each outer segment
   borders one,
-- the blocks are connected.
+- river segments are inner segments (they border two blocks),
+- the blocks are connected (counting shared river segments).
 
 A map that fails a check is rejected.
 
@@ -81,24 +83,28 @@ draws roads from Lean's segments, so the drawing and the rules can't disagree.
 - **The subway** runs underground. It does not use streets and does not slow
   traffic (§4.2).
 
-### 2.4 Segment kinds and terrain
+### 2.4 The river and bridges
 
-Each segment has a **kind** and a **terrain** value.
+Each segment has a **kind** (only streets so far) and a **terrain**: `ground`
+or `stream`.
 
-| Kind | Cars | Buses | Walking | First version |
-|---|---|---|---|---|
-| Street | yes | yes | yes | yes |
-| Footpath (through a park) | no | no | yes | later |
-
-| Terrain | First version | Later |
-|---|---|---|
-| Ground | yes | yes |
-| Stream (segment is a bridge, costs more) | no | yes |
-| Hill (slower walking) | no | yes |
-
-In the first version every segment is a street on ground. Both fields exist
-from the start, so adding footpaths, streams and bridges later only adds rows
-to the cost and travel-time tables. The main theorem does not change.
+- **The river.** `tools/genmap.mjs` picks a chain of inner segments that runs
+  from one edge of town to the other and marks them `stream` (JSON
+  `"stream"`). The river cuts the town in two.
+- **Across the river, blocks are neighbors only over a bridge.** Two blocks
+  whose only shared segments are river segments are **not** neighbors unless a
+  bridge is built on one of those segments. (Blocks that also share a land
+  road are neighbors anyway.)
+- **Bridge sites.** Each puzzle lists up to 7 river segments where a bridge may
+  be built (`Puzzle.bridgeSites`, segment numbers). The player turns each
+  bridge on or off (`Solution.bridges`). Each bridge costs `bridgeCost`.
+- **Buses cross only on bridges.** A bus route crosses the river only by
+  driving along a river segment, and only if the bridge there is built. A
+  route that is on without its bridges is **not valid**. (A route that drives
+  along a river segment with no bridge site can never run.) The map generator
+  makes routes cross the river only along a river segment, never through a
+  river point on two land roads, and the puzzle generator makes every river
+  segment a route uses a bridge site.
 
 ---
 
@@ -119,9 +125,9 @@ Each block gets **one** of these:
 
 That's 12 choices in the full catalog.
 
-**[ASSUMED]** Units per story: housing has 2 home units per story, an office
-has 2 job units per story, a shop has 1 job unit per story, and a bar has
-1 job unit.
+Per story: housing has 20 residents, an office has 20 jobs, a shop serves
+20 customers a day. Only offices have jobs. Parks and bars score no points of
+their own: they matter through their neighbors (§5.2).
 
 Taller buildings give more homes or jobs, cost more, and make neighbors
 unhappy (see "quiet" in §5). That's why neither "all 3-story" nor
@@ -144,161 +150,121 @@ the solver fast (§8.4).
 
 ### 4.1 Bus routes
 
-- Each puzzle comes with a **fixed list of 1–3 possible routes [ASSUMED]**.
-  A route is a path along streets, with stops at some of its intersections.
-  The player turns each route on or off.
-- A block is **served** if a route that is on stops on its edge (§2.3).
+- Each puzzle comes with a fixed list of possible routes. A route is a path
+  along streets. The player turns each route on or off.
+- A block is **served** if a route that runs stops on its edge. Two blocks are
+  **one bus ride apart** if one route that runs stops at both.
+- A route **runs** if it is on and the bridges it needs are built (§2.4).
 
-A route that is on must pass all three **route rules**. A layout with a route
-that fails any rule is not valid.
-
-1. **New riders.** Turning the route off would lose at least `minNewRiders`
-   transit riders across the whole neighborhood. A route that only takes
-   riders from another route fails.
-2. **Pays for itself.** The route has at least `minRouteRiders` riders a day,
-   where `minRouteRiders` = the route's daily operating cost ÷ fare, rounded
-   up. This is the same break-even rule as the subway station (§4.2)
-   **[ASSUMED]**. Build cost comes from the budget and is not counted here. A
-   trip that changes buses counts as a rider on each route it uses.
-3. **Does not choke traffic.** Each street segment carries at most
-   `maxBusRoutesPerRoad` routes **[ASSUMED: 2]**.
+**Route rule.** A route that is on has its bridges built and at least
+`minRouteRiders` riders a day (daily cost ÷ fare, rounded up). Riders are
+residents who ride it to a job (they have no job next door, don't hate
+transit, and the route stops at a block with jobs), plus subway workers it
+carries from the station.
 
 ### 4.2 Subway station
 
-- The player may build **at most one** station, at one of **2–3 sites** the
-  puzzle lists **[ASSUMED]**.
-- The station **sits on a block alongside whatever is built there**. It does
-  not use up the block.
-- **Who rides it.** Outside workers come by subway to fill jobs that local
-  residents don't fill, but only jobs **within reach** of the station: within
-  `walkRange` on foot, or along a bus route that stops at the station. Outside
-  shoppers come the same way for shops and bars within reach **[ASSUMED]**.
-  So where the station goes, and what is built near it, decides its riders.
-- **Benefits:**
-  - Outside workers fill jobs, so they **reduce the housing shortage** (§6,
-    step 6). A station is a real alternative to tall housing.
-  - A bus route that stops at the station picks up its riders, which helps
-    the route pass the new-riders and pays-for-itself rules.
-- **Costs:** a large build cost from the budget.
+- The player may build **at most one** station, on any block (generated
+  puzzles list every block as a site).
+- The station sits on a block alongside whatever is built there.
+- **Reach.** The station reaches its own block, its neighbors, and blocks one
+  bus ride away.
+- **Outside workers** come by subway to fill the jobs in reach that local
+  residents don't fill. They fill those jobs and reduce the housing shortage.
+- **Outside shoppers**: `shoppersPerShopStory` per shop story in reach. They
+  count as riders.
 
-**Station rule.** A station that is built must have at least
-`minStationRiders` riders a day. A station that fails is not valid.
-
-**[ASSUMED]** How to set the number: the break-even point.
-
-> `minStationRiders` = daily operating cost ÷ fare, rounded up.
-
-Example: $9,000 a day to run, $2.50 fare → at least 3,600 riders a day.
-In game units the numbers are smaller, but the formula is the same.
+**Station rule.** A station that is built has at least `minStationRiders`
+riders a day (outside workers plus outside shoppers).
 
 ### 4.3 People from outside
 
-- Each puzzle states how many **outside commuters** arrive at the gateways
-  (§2.1) by car or outside bus, for work and shopping **[ASSUMED]**.
-- They travel inside the neighborhood like residents (§6, step 3), so they add
-  bus riders and car traffic.
-
-Having no routes and no station at all always passes every transit rule.
+Only by subway (§4.2): outside workers and shoppers. Gateways for outside cars
+and buses are not built.
 
 ---
 
 ## 5. Residents and culture
 
-### 5.1 Groups
+### 5.1 Groups and personalities
 
-Each puzzle has **2–3 resident groups** with a fixed mix, for example
-"60% families, 40% students." Every housing block holds that same mix
-**[ASSUMED]**.
+Each puzzle has 2 resident groups with a fixed mix, for example "60% families,
+40% students". Every housing block holds that same mix.
+
+Each group has **2–3 personality types** (`Group.types`). The first is the
+usual one; most of the group has it. Each minority type flips one factor, for
+example "20% of Families are Night owls, who care about nightlife". A type's
+residents on a block are residents × group share × type share, rounded down.
 
 ### 5.2 Culture
 
-For each group and each factor, the puzzle says whether the group
-**cares about** it (+2), is **neutral** about it (+1), or **hates** it (−1).
+For each personality and each factor, the puzzle says whether it **cares
+about** it (+2), is **neutral** (+1), or **hates** it (−1).
 
-| Factor | A resident in a housing block gets this if… |
+| Factor | A resident of a housing block has it if… |
 |---|---|
-| Parks | a park is on or next to their block |
-| Nightlife | a bar is on or next to their block |
+| Parks | a park is next to their block |
+| Nightlife | a bar is next to their block |
+| Shops | a shop is next to their block |
 | Quiet | no 3-story building and no bar is next to their block |
-| Short commute | their trip to work costs at most `shortCommute` (§6, step 3) |
-| Walkability | they can walk to work, a shop and a park within `walkRange` |
-| Transit | their block is served by a bus route or is next to the station |
-| Shops | a shop is on or next to their block |
+| Transit | a route that runs stops at their block, or the station is on or next to it |
+| Variety | at least 3 different kinds of building are next to their block |
 
-The puzzle text is **generated from these values**, so it always matches the
-rules. Example:
-
-> In this neighborhood, families care about parks and quiet, but hate
-> nightlife. Students care about nightlife and transit. Nobody here cares
-> much about walking.
-
-Culture also affects travel (§6, step 3):
-
-- If a group **cares about walkability**, walking costs it less.
-- If a group **hates walkability**, walking costs it more, so it drives. A
-  walkable layout earns it nothing.
-- If a group **hates transit**, the bus and subway cost it more.
-
-So walking matters in some neighborhoods and not in others.
+"Next to" means a neighbor (§2.1): across the river only over a built bridge.
+The culture text is generated from the groups and their types, so it always
+matches the rules.
 
 ---
 
-## 6. How a layout is scored: one fixed pass
+## 6. How a layout is scored
 
-The steps run once, in this order. Nothing loops back.
+A block's value depends only on the blocks it **watches**: itself, its
+neighbors, and blocks one bus ride away (`SevenBridges/Rules/Score.lean`).
 
-1. **Count homes and jobs** from the buildings (§3). Add the outside
-   commuters arriving at gateways (§4.3). If a station is built, work out
-   which jobs, shops and bars are within its reach (§4.2).
-2. **Plan trips.** Each home unit, for each group, makes a work trip to the
-   nearest block with jobs, by road distance (§2.3). Ties go to the lowest
-   block number. Outside commuters travel from their gateway or the station.
-   Shopping and nightlife are counted by nearness in §5, not as trips.
-3. **Choose how to travel.** Each trip takes the cheapest of walk, bus and
-   car. Cost is road length × mode cost, plus any culture adjustment (§5.2).
-   Ties are broken in the order walk, bus, car.
-   **[ASSUMED]** Cost per unit of length: walk 3, bus 1 (only between stops of
-   routes that are on, plus a fixed cost for each bus change), car 2.
-4. **Count riders** per route and at the station. Station riders are the
-   outside workers filling jobs within its reach that residents don't fill,
-   plus outside shoppers. Check the route rules (§4.1) and the station rule
-   (§4.2).
-5. **Happiness.** For each group in each housing block, add up the culture
-   values of the factors it gets (§5.2), and multiply by the number of
-   residents.
-6. **Crime.** A block gets crime points:
-   - +1 if any group living there has happiness below `unhappyLine`.
-   - +1 if the neighborhood has a **housing shortage**:
-     shortage = jobs − homes − outside workers arriving by subway
-     (0 if there are enough homes and subway workers).
-   Crime is capped at 2.
-7. **Crime penalty.** Each crime point lowers productivity and happiness on
-   that block and its neighbors by fixed amounts.
-8. **Productivity** = job units filled by workers who can reach them, minus
-   crime penalties.
-9. **Score** = happiness + productivity. **[ASSUMED]** equal weight.
+For each block:
 
-All numbers are whole numbers. There is no `Float`.
+1. **Happiness** (housing): for each personality type of each group, its
+   residents there × its happiness per person (the sum of its feelings about
+   the factors it has).
+2. **Crime** (housing, a slope): for each type below `unhappyLine`,
+   `unhappyCost` × (line − happiness per person) × its residents there.
+3. **Productivity** (offices): `jobWorth` × filled jobs × (100 + office
+   bonus) ÷ 100. Jobs are filled by residents next door or one bus ride away;
+   if the station reaches the block, outside workers fill the rest. The office
+   bonus is `officeBonusPerOffice` % per neighboring office, at most
+   `officeBonusMax` %.
+4. **Sales** (shops): `saleWorth` × min(customers it can serve, residents
+   next door or one bus ride away).
+
+Bars and parks score nothing themselves.
+
+**Score** = sum over blocks of (happiness + productivity + sales − crime)
+− `shortageCost` × shortage, where shortage = jobs − homes − outside workers
+(never below 0). All numbers are whole numbers.
+
+**Rating** = 100 × (score − empty-town score) ÷ (best − empty-town score),
+rounded down, at least 0; invalid layouts get 0.
 
 ---
 
 ## 7. Budget and validity
 
-- **Cost** = build cost of each building (higher for each extra story)
-  + build cost of each route that is on + operating cost over the period
-  + the station's build cost, if built.
-- **[ASSUMED]** Prices are the same in every puzzle. Only the budget changes.
+- **Cost** = buildings on open blocks + each route that is on (build plus
+  `years` of running) + the station, if built (the same) + `bridgeCost` per
+  bridge built.
 
-A **solution** is one choice for each block that isn't fixed, plus the set of
-routes that are on, plus the station site (or none). It is **valid** if:
+A **solution** is one choice per block, the routes that are on, the station
+site (or none), and the bridges built. It is **valid** if:
 
-1. every choice is allowed by the puzzle (§3.2),
+1. it fits the puzzle (allowed buildings, fixed blocks, one switch per route
+   and per bridge site, station on a listed site),
 2. total cost ≤ budget,
-3. every route that is on passes all three route rules, and
-4. the station, if built, passes the station rule.
+3. every route that is on has its bridges built and at least
+   `minRouteRiders` riders, and
+4. the station, if built, has at least `minStationRiders` riders.
 
-Leaving every open block empty, with no routes and no station, is always
-valid. So every puzzle has at least one valid solution.
+The empty layout (nothing built, no routes, no station, no bridges) is always
+valid (`empty_valid`).
 
 ---
 
@@ -335,14 +301,15 @@ Run `#spec_surface solve_is_best` to list exactly what to read.
 
 - **Satisfiable**: an `example` on a concrete 7-block puzzle where `solve`
   returns a solution, with every rule checked.
-- **Rejects bad solutions**: `example`s showing that each of these is not
-  valid:
-  - a route whose riders all came from another route
+- **Rejects bad solutions** (`#guard`s in `SevenBridges/Demo.lean`): each of
+  these is not valid:
+  - a route that is on without the bridge it crosses
   - a route with too few riders to pay for itself
   - a station with fewer than `minStationRiders` riders a day
-  - three routes on one street segment
   - a layout that goes over budget
   - a building the puzzle doesn't allow, or a change to a fixed block
+- **The river**: in Old Harbor, blocks 0 and 3 share only a river segment;
+  they are not neighbors without the bridge, and are with it.
 - **Reference comparison**: on small puzzles, `solve` gives the same score as
   plain search through every solution (`bestByChecking`).
 
@@ -444,11 +411,24 @@ Fast to prove and hard to solve don't conflict. The solver sees the bounds
 and the planted score. The player sees neither, and a puzzle with many
 near-best traps can still have a small gap between U and L.
 
-**Built so far** (`SevenBridges/Generator.lean`): steps 1–3 and 6, with a
-random planted layout setting the budget, and the filters "unique best",
-"uses transit" and "greedy play scores under 90% of the best". The quick
-check (step 4) and the gap check (step 5) are not built yet. The plain-search
-solver doesn't need them.
+**Built so far** (`SevenBridges/Generator.lean`): a random puzzle (groups
+with personalities, allowed buildings, bridge sites, built blocks), a random
+planted layout that sets the budget, then the proven solver. A puzzle is kept
+if its best layout uses transit (a route, the station or a bridge), has homes,
+and greedy play scores under 90% of it. The quick check (step 4) and the gap
+check (step 5) are not built.
+
+**Sizes.** The generator offers less choice on bigger maps, so the proven
+solver finishes in time:
+
+| Size | Blocks | Heights | Bridge sites | Blocks already built |
+|---|---|---|---|---|
+| easy | 5–6 | 1–3 | up to 3 | 0 |
+| medium | 7 | 1–3 | up to 2 | 1 |
+| hard | 8–9 | 1–2 (shops 1) | 1 | 3 |
+
+Bridge sites are first the river segments a route uses, so those routes can
+run.
 
 **The generator doesn't need a proof and isn't trusted.** It can be clever,
 messy, or written in TypeScript. Planting is only a way to aim for good
@@ -458,20 +438,27 @@ step 6 finds the better one and the puzzle is fixed or thrown away.
 
 ### 8.6 Time limits, as proven step limits
 
-Lean can't prove anything about seconds, since that depends on the machine.
-It can prove a bound on **work**: the number of layouts scored. Seconds = work
-× time per layout, and time per layout is measured.
+Lean can't prove anything about seconds. It proves a bound on **work** (search
+steps and layouts scored); seconds = work × time per step, measured.
 
 | Theorem | Says |
 |---|---|
-| `length_candidates` | the solver's candidate list has exactly `candidateCount p` entries |
-| `solveWork_le` | the solver scores at most `stepLimit` (3,000,000) layouts |
-| `Generator.generate_work_le` | the generator scores at most `generatorStepBudget` (700,000) layouts in total |
+| `solveWithFuel_steps_le` | the fast solver takes at most `fuel` steps (`searchFuel` = 3,000,000 in the game) |
+| `solveWork_le` | plain search scores at most `stepLimit` layouts |
+| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (350,000) steps in total, at most `attemptFuel` (175,000) per attempt |
 
-Measured on an M-series Mac: 3–10 µs per layout, so the generator's 700,000
-layouts take at most about 7 seconds, inside the 10-second budget.
-`tools/timegen.mjs` re-measures this. The generator caps open blocks at 5 so
-each attempt stays small.
+Measured on this machine (12 cores): 5–25 µs per step, so the generator takes
+at most about 8.5 s. `node tools/timegen.mjs <binary> [blocks:seed …]`
+re-measures it. On 40 maps of 5–9 blocks, every run took ≤ 8.5 s; runs that
+found a puzzle took ≤ 4 s; about 1 in 10 runs gives up (the caller retries
+with another seed).
+
+**The search.** Transit choices are grouped by (routes, bridges); each group
+holds every station choice. Routes on without their bridges are left out. The
+search splits each block's options (homes or not, then kind), then picks the
+transit, then heights. The work is first run piece by piece with 200,000
+steps; if that runs out, the pieces are dealt into 8 hands that run in
+parallel, each with an equal share of the fuel.
 
 ---
 
@@ -629,22 +616,15 @@ proven best leaves a lot empty. The score has *cliffs* (one extra job triggers
 crime on every block) and jobs are worth little next to happiness, so careful
 play feels no better than luck, and the best plan isn't explainable.
 
-**Changes.** All local except the shortage, which becomes a slope.
+**Done** (rules now as in §4–§7): proportional shortage and crime, jobs worth
+points, shops need customers, office clusters, variety, the rating. Then cut
+to a smaller visible set: no short-commute or walkability factor, no park
+bonus for offices, shops and bars have no jobs, one route rule (riders), and
+the river, bridges and personalities were added.
 
-| Rule | New version | Why |
-|---|---|---|
-| Housing shortage | Costs `shortageCost` points per missing home, not crime on every block. | Slope, not cliff. |
-| Unhappy residents | Cost `unhappyCost` × (line − happiness per person) × people. | Slope, not cliff. |
-| Jobs | Each filled job is worth `jobWorth` points, about as much as a happy resident. | Offices and shops matter. |
-| Shops need customers | A shop also needs customers: residents next door or one bus ride away. Each customer up to its size adds `saleWorth`. | Shops near homes, but homes want quiet. |
-| Offices like company | +20% filled jobs per neighboring office, up to +40%. | Business corners. |
-| Parks lift neighbors | Offices next to a park: +10% filled jobs; homes already get "parks". | Park vs. building trade-off. |
-| Mixed streets | New factor *variety*: at least 3 different kinds next door. | Mix, don't copy-paste. |
-| Rating | 100 × (score − empty-town score) ÷ (best − empty-town score), rounded down, at least 0. | Fair scale; decent plans land around 60–80. |
-
-**Generator checks for strategy.** Keep a puzzle only if, over 200 random
-valid layouts, the median rating is at most 50 and the 95th percentile at most
-85, so thinking clearly beats luck. Puzzles come in three sizes: easy (5
+**Strategy check** (`lake exe ratingdist`, not in the generator): over 2,000
+random valid layouts, the median rating should be at most 50 and the 95th
+percentile at most 85, so thinking clearly beats luck. Puzzles come in three sizes: easy (5
 blocks), medium (7), hard (9).
 
 ### 14.2 Realistic bus process (not random)

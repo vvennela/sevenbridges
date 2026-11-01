@@ -16,7 +16,7 @@ def demoMap : RoadMap where
 
 def demoRoutes : List Route :=
   [{ name := "Crosstown", path := [1, 0, 8, 9, 20, 32, 31, 30] },
-   { name := "Northside", path := [25, 26, 27, 13, 14, 15, 16, 17, 18, 11, 12, 28, 29, 30] }]
+   { name := "Northside", path := [25, 26, 27, 13, 10, 11, 12, 28, 29, 30] }]
 
 /-- River segments where a bridge may be built. -/
 def demoBridgeSites : List Nat := [8, 10, 20]

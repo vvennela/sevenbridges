@@ -434,12 +434,21 @@ theorem rootJobs_spec (p : Puzzle) :
           List.getElem?_eq_none (by omega), List.getElem?_eq_none (by omega)]
         simp
 
+theorem expandTimes_spec (p : Puzzle) :
+    ∀ (n : Nat) (js : List Job), (∀ j ∈ js, j.Ok p) →
+      (∀ j' ∈ expandTimes n js, j'.Ok p)
+      ∧ ∀ t, (∃ j ∈ js, j.Fits t) → ∃ j' ∈ expandTimes n js, j'.Fits t
+  | 0, js, h => ⟨h, fun _ h => h⟩
+  | n + 1, js, h => by
+    have h1 := expandAll_spec p js h
+    have ih := expandTimes_spec p n _ h1.1
+    exact ⟨ih.1, fun t ht => ih.2 t (h1.2 t ht)⟩
+
 theorem jobs_spec (p : Puzzle) :
     (∀ j ∈ jobs p, j.Ok p) ∧ ∀ t, Valid p t → ∃ j ∈ jobs p, j.Fits t := by
   have h0 := rootJobs_spec p
-  have h1 := expandAll_spec p _ h0.1
-  have h2 := expandAll_spec p _ h1.1
-  have hmem : ∀ j, j ∈ jobs p ↔ j ∈ ((rootJobs p).flatMap Job.expand).flatMap Job.expand := by
+  have h2 := expandTimes_spec p splitDepth _ h0.1
+  have hmem : ∀ j, j ∈ jobs p ↔ j ∈ expandTimes splitDepth (rootJobs p) := by
     intro j
     simp only [jobs, List.mem_map, List.mem_mergeSort, Prod.exists]
     constructor
@@ -451,7 +460,7 @@ theorem jobs_spec (p : Puzzle) :
   constructor
   · intro j hj; exact h2.1 j ((hmem j).1 hj)
   · intro t hv
-    obtain ⟨j, hj, hfit⟩ := h2.2 t (h1.2 t (h0.2 t hv))
+    obtain ⟨j, hj, hfit⟩ := h2.2 t (h0.2 t hv)
     exact ⟨j, (hmem j).2 hj, hfit⟩
 
 /-! ## Running the pieces -/
@@ -516,21 +525,29 @@ theorem sum_steps_le (rs : List Search) (share : Nat) (h : ∀ r ∈ rs, r.steps
 
 theorem task_spawn_get {α : Type} (f : Unit → α) (prio : Task.Priority) : (Task.spawn f prio).get = f () := rfl
 
-theorem runTogether_spec (p : Puzzle) (keep : Solution → Bool) (js : List Job) (hjs : ∀ j ∈ js, j.Ok p)
-    (start : Search) :
-    start.Later p (runTogether keep js start)
-    ∧ ∀ j ∈ js, (runTogether keep js start).Covered p keep j.Fits := by
-  unfold runTogether
+/-- Every piece is in some hand. -/
+theorem mem_deal {α : Type} (k : Nat) (hk : 0 < k) (js : List α) (j : α) (hj : j ∈ js) :
+    ∃ h ∈ deal k js, j ∈ h := by
+  obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.1 hj
+  refine ⟨_, List.mem_map.2 ⟨i % k, List.mem_range.2 (Nat.mod_lt _ hk), rfl⟩, ?_⟩
+  refine List.mem_map.2 ⟨(js[i], i), List.mem_filter.2 ⟨?_, by simp⟩, rfl⟩
+  exact List.mem_iff_getElem.2 ⟨i, by simp [hi], by simp⟩
+
+theorem runHands_spec (p : Puzzle) (keep : Solution → Bool) (hs : List (List Job))
+    (hjs : ∀ h ∈ hs, ∀ j ∈ h, j.Ok p) (start : Search) :
+    start.Later p (runHands keep hs start)
+    ∧ ∀ h ∈ hs, ∀ j ∈ h, (runHands keep hs start).Covered p keep j.Fits := by
+  unfold runHands
   simp only [List.map_map, Function.comp_def, task_spawn_get]
-  generalize hshare : start.fuel / js.length = share
+  generalize hshare : start.fuel / hs.length = share
   generalize hs0 : ({ start with fuel := share, steps := 0 } : Search) = s0
   have hs0f : s0.fuel = share := by rw [← hs0]
   have hs0s : s0.steps = 0 := by rw [← hs0]
   have hs0g : start.Good p → s0.Good p := by rw [← hs0]; exact id
-  generalize hR : (js.map fun j => j.run keep s0) = rs
-  have hspec := fun j (hj : j ∈ js) => run_spec p keep j (hjs j hj) s0
-  have hmemR : ∀ r ∈ rs, ∃ j ∈ js, r = j.run keep s0 := by
-    intro r hr; rw [← hR] at hr; obtain ⟨j, hj, rfl⟩ := List.mem_map.1 hr; exact ⟨j, hj, rfl⟩
+  generalize hR : (hs.map fun h => runInTurn keep h s0) = rs
+  have hspec := fun h (hh : h ∈ hs) => runInTurn_spec p keep h (hjs h hh) s0
+  have hmemR : ∀ r ∈ rs, ∃ h ∈ hs, r = runInTurn keep h s0 := by
+    intro r hr; rw [← hR] at hr; obtain ⟨h, hh, rfl⟩ := List.mem_map.1 hr; exact ⟨h, hh, rfl⟩
   have hgood : ∀ r ∈ rs, start.Good p → r.Good p := by
     intro r hr hg
     obtain ⟨j, hj, rfl⟩ := hmemR r hr
@@ -543,17 +560,24 @@ theorem runTogether_spec (p : Puzzle) (keep : Solution → Bool) (js : List Job)
     omega
   have hused := sum_steps_le rs share hsteps
   have hlen : rs.length * share ≤ start.fuel := by
-    rw [← hR, List.length_map, ← hshare]; exact Nat.mul_div_le start.fuel js.length
+    rw [← hR, List.length_map, ← hshare]; exact Nat.mul_div_le start.fuel hs.length
   refine ⟨⟨fun hg => hfold.1 hg, hfold.2.1, ?_, ?_⟩, ?_⟩
   · simp only; split <;> omega
   · simp only; split <;> omega
-  · intro j hj hf t hv hk hfit
+  · intro h hh j hj hf t hv hk hfit
     have hall : ∀ r ∈ rs, r.fuel > 0 := by
       simp only at hf; split at hf
       · rename_i h; intro r hr; exact of_decide_eq_true (List.all_eq_true.1 h r hr)
       · omega
-    have hr : j.run keep s0 ∈ rs := by rw [← hR]; exact List.mem_map.2 ⟨j, hj, rfl⟩
-    exact Int.le_trans ((hspec j hj).2 (hall _ hr) t hv hk hfit) (hfold.2.2 _ hr)
+    have hr : runInTurn keep h s0 ∈ rs := by rw [← hR]; exact List.mem_map.2 ⟨h, hh, rfl⟩
+    exact Int.le_trans ((hspec h hh).2 j hj (hall _ hr) t hv hk hfit) (hfold.2.2 _ hr)
+
+/-- Running the hands at the same time gives the same result as `runHands`. -/
+theorem runTogether_eq (keep : Solution → Bool) (p : Puzzle) (start : Search) :
+    runTogether keep p start = runHands keep (deal hands (jobs p)) start := by
+  unfold runTogether runHands combineHands
+  simp only [List.map_map, Function.comp_def, task_spawn_get, Puzzle.fresh_eq, deal,
+    List.length_map, List.length_range]
 
 /-- **The whole search** visits everything: if it has fuel left, no allowed
 valid layout scores more than the best it found. -/
@@ -578,11 +602,20 @@ theorem searchAll_spec (p : Puzzle) (keep : Solution → Bool) (start : Search) 
     exact hquick.2 j hjm hf t hv hk hfit
   · have hq1 : start.Later p { quick with fuel := start.fuel - (quick.steps - start.steps) } :=
       ⟨fun hg => hlq.1 hg, hlq.2.1, Nat.sub_le _ _, by simp only; omega⟩
-    have htog := runTogether_spec p keep (jobs p) hj.1 { quick with fuel := start.fuel - (quick.steps - start.steps) }
+    have hdeal : ∀ h ∈ deal hands (jobs p), ∀ j ∈ h, j.Ok p := by
+      intro h hh j hjh
+      simp only [deal, List.mem_map, List.mem_range] at hh
+      obtain ⟨_, _, rfl⟩ := hh
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hjh
+      exact hj.1 _ (List.of_mem_zip (List.mem_filter.1 hx).1).1
+    have htog := runHands_spec p keep (deal hands (jobs p)) hdeal
+      { quick with fuel := start.fuel - (quick.steps - start.steps) }
+    rw [runTogether_eq]
     refine ⟨Search.Later.trans hq1 htog.1, ?_⟩
     intro hf t hv hk _
     obtain ⟨j, hjm, hfit⟩ := hj.2 t hv
-    exact htog.2 j hjm hf t hv hk hfit
+    obtain ⟨h, hh, hjh⟩ := mem_deal hands (by decide) (jobs p) j hjm
+    exact htog.2 h hh j hjh hf t hv hk hfit
 
 /-! ## Main theorems -/
 

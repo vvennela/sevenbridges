@@ -39,6 +39,7 @@ def study (label : String) (p : Puzzle) (seed : Nat) : IO Unit := do
   say s!"  ratings: median {pct sorted 50} p90 {pct sorted 90} p95 {pct sorted 95} p99 {pct sorted 99} max {sorted.back?.getD 0}"
   say s!"  best: {best.build.map Building.kindName |>.zip (best.build.map Building.stories)} routes {best.routesOn} station {best.station}"
   say s!"  happiness {rep.happiness} productivity {rep.productivity} sales {rep.sales} crime {rep.crime} shortage {rep.shortage} cost {rep.cost}/{p.budget}"
+  say s!"  route riders {rep.routes.map (·.riders)} left behind {rep.leftBehind} fullest buses {rep.buses.map (·.maxLoad)} station riders {rep.stationRiders} bridges {best.bridges}"
   say s!"  groups: {p.groups.map Group.describe}"
   say s!"  per block: {rep.blocks.map fun b => (b.happiness, b.productivity, b.crime, b.scoreImpact)}"
 

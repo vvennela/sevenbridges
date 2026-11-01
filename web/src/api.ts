@@ -52,7 +52,8 @@ export class Engine {
   demo() { return this.call<PuzzleReply>({ cmd: "demo" }); }
   /** `rate`: also get the rating out of 100 (solves the puzzle the first time). */
   evaluate(solution: Solution, rate = false) { return this.call<EvalReply>({ cmd: "evaluate", solution, rate }); }
-  newPuzzle(seed: number) { return this.call<GenerateReply>({ cmd: "newPuzzle", seed }); }
+  /** `size`: easy / medium / hard = 5 / 7 / 9 blocks. */
+  newPuzzle(seed: number, size: "easy" | "medium" | "hard" = "medium") { return this.call<GenerateReply>({ cmd: "newPuzzle", seed, size }); }
   solve() { return this.call<SolveReply>({ cmd: "solve" }); }
 }
 

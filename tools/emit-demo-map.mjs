@@ -13,10 +13,10 @@ const river = m.segments.map((s, i) => (s.terrain === "stream" ? i : -1)).filter
 
 // Bridge sites: every river segment except the one between blocks 0 and 1.
 const bridgeSites = river.filter((i) => segIndex(7, 8) !== i);
-// Crosstown crosses the river on the bridge site at segment 0-8.
+// Crosstown crosses the river along segment 0-8, Northside along 10-13.
 const routes = [
-  { name: "Crosstown", path: [1, 0, ...streetPath(m, 8, 30)] },
-  { name: "Northside", path: [25, 26, 27, 13, 14, 15, 16, 17, 18, 11, 12, 28, 29, 30] },
+  { name: "Crosstown", path: streetPath(m, 1, 30) },
+  { name: "Northside", path: streetPath(m, 25, 30) },
 ];
 for (const r of routes) r.path.forEach((v, i) => {
   if (i > 0 && segIndex(r.path[i - 1], v) < 0) throw new Error(`${r.name}: no segment ${r.path[i - 1]}-${v}`);

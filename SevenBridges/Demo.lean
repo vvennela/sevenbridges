@@ -56,8 +56,12 @@ def firstBridge : Transit := ⟨[false, false], none, [true, false, false]⟩
 #guard firstBridge.isNeighbor (prepare oldHarbor) 3 0
 -- Blocks 0 and 4 share a road on land: neighbors either way.
 #guard noBridges.isNeighbor (prepare oldHarbor) 0 4
--- Crosstown uses the first bridge site.
+-- Every river segment a route drives along is a bridge site, so every route
+-- can run once its bridges are built.
+#guard (prepare oldHarbor).routeBlocked.all (· == false)
+-- Crosstown needs the first bridge, Northside the third.
 #guard (prepare oldHarbor).bridgesFor 0 == [0]
+#guard (prepare oldHarbor).bridgesFor 1 == [2]
 
 
 
@@ -90,7 +94,8 @@ def noBridgeBus : Solution := { sampleLayout with bridges := [false, false, fals
 #guard (problems oldHarbor noBridgeBus).contains "Crosstown crosses the river where no bridge is built"
 
 -- A bus route with nobody to carry.
-def emptyBus : Solution := { emptyLayout oldHarbor with routesOn := [false, true] }
+def emptyBus : Solution :=
+  { emptyLayout oldHarbor with routesOn := [false, true], bridges := [false, false, true] }
 #guard !decide (Valid oldHarbor emptyBus)
 
 end SevenBridges.Demo

@@ -156,6 +156,6 @@ export interface GenerateReply {
 export type Request =
   | { cmd: "puzzle" }
   | { cmd: "demo" }
-  | { cmd: "newPuzzle"; seed: number }
+  | { cmd: "newPuzzle"; seed: number; size?: "easy" | "medium" | "hard" }
   | { cmd: "evaluate"; solution: Solution; rate?: boolean }
   | { cmd: "solve" };
