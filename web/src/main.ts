@@ -248,8 +248,9 @@ function urlWith(extra: Record<string, string | null>): string {
 }
 
 /** Ask Lean for a new random town of this size (a few seeds, in case one can't be planned). */
-async function newTown(seed: number, size: Size): Promise<{ pr: PuzzleReply; info: LevelInfo }> {
-  for (let s2 = seed, tries = 0; tries < 6; s2++, tries++) {
+async function newTown(seed: number, size: Size, fresh = false): Promise<{ pr: PuzzleReply; info: LevelInfo }> {
+  // `fresh`: a new game, so a seed that fails is replaced by another fresh one (never a played one)
+  for (let s2 = seed, tries = 0; tries < 6; s2 = fresh ? randomSeed() : s2 + 1, tries++) {
     const g = await engine.newPuzzle(s2, size);
     if (g.generated && g.puzzle) {
       const pz = g.puzzle.puzzle;
@@ -261,7 +262,27 @@ async function newTown(seed: number, size: Size): Promise<{ pr: PuzzleReply; inf
   throw new Error("Couldn't plan a town this time");
 }
 
-const randomSeed = () => 1 + Math.floor(Math.random() * 99998);
+/** Seeds already played on this device, so a new game never repeats a town. */
+const PLAYED_KEY = "sb-played-seeds";
+function playedSeeds(): Set<number> {
+  try { return new Set((JSON.parse(localStorage.getItem(PLAYED_KEY) ?? "[]") as number[]).filter(Number.isInteger)); } catch { return new Set(); }
+}
+function markPlayed(seed: number) {
+  const s = playedSeeds();
+  s.add(seed);
+  localStorage.setItem(PLAYED_KEY, JSON.stringify([...s].slice(-5000)));
+}
+/** A fresh 32-bit seed (1..2^32-1) from the browser's crypto source, never one played before. */
+function randomSeed(): number {
+  const used = playedSeeds();
+  if (level) used.add(level.seed);
+  const buf = new Uint32Array(1);
+  for (;;) {
+    crypto.getRandomValues(buf);
+    const s2 = buf[0];
+    if (s2 !== 0 && !used.has(s2)) return s2;
+  }
+}
 
 // ---------- title screen ----------
 
@@ -310,12 +331,13 @@ function startTitle() {
 }
 
 /** Start → pick a size → Lean makes the town and proves its best plan → play. */
-async function playNew(size: Size, seed = randomSeed()) {
+async function playNew(size: Size) {
   showScreen("wait");
   $("wait-text").textContent = "Building your town…";
   try {
-    const { pr, info } = await newTown(seed, size);
-    history.replaceState(null, "", urlWith({ seed: String(info.seed), size: info.size }));
+    const { pr, info } = await newTown(randomSeed(), size, true);
+    // Don't record the town in the address: reloading starts fresh at the title.
+    history.replaceState(null, "", urlWith({ seed: null, size: null }));
     enterLevel(pr, info);
   } catch (e) {
     $("wait-text").textContent = `${(e as Error).message}. Trying again…`;
@@ -328,6 +350,7 @@ function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
   if (MOCK) mockPuzzle(pr);
   if (info) { info.simSeed ??= pr.puzzle.simSeed; info.verified ??= pr.puzzle.verified; }
   level = info;
+  if (info) markPlayed(info.seed);
   pickSize = info?.size ?? pickSize;
   st.pr = pr;
   st.mode = "edit"; st.live = null; st.built = null; st.tool = null; st.station = null; st.postcardOpen = false;
@@ -1523,6 +1546,7 @@ if (new URLSearchParams(location.search).has("test")) {
     bridgeSites: () => (st.pr?.puzzle.bridgeSites ?? []).map((_s, i) => ({ i, p: world.screenOf({ kind: "bridge", i }) })),
     lookBlock: (i: number, d: number, e: number) => world.lookAt(world.centerOf(i), d, e),
     far: () => world.titleView(),
+    lookDowntown: (d: number, e: number) => { const m = world.metro; if (m) world.lookAt(m.downtown, d, e); },
     zoom: (k: number) => world.cam.set(world.cam.goal.target, world.cam.goal.dist * k, world.cam.goal.az, world.cam.goal.polar),
     recenter: () => world.recenter(),
     setAll: (kind: Kind, stories: number) => { st.build = st.build.map(() => ({ kind, stories })); world.setBuild(st.build, st.station); void refreshLive(); },

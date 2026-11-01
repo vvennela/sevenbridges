@@ -16,6 +16,8 @@ export const U = {
   uSun: { value: 1 },
   uWin1: { value: col(C.window).clone() },
   uWin2: { value: col("#5F86C8").clone() },
+  /** Downtown's window color (lifted toward the haze). */
+  uWin3: { value: new THREE.Color(0, 0, 0) },
   uWarm: { value: new THREE.Color(1.0, 0.72, 0.36) },
 };
 
@@ -57,7 +59,7 @@ vSbWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", `#include <common>
 uniform float uTime; uniform float uNight; uniform float uCloud; uniform float uSun;
-uniform vec3 uWin1; uniform vec3 uWin2; uniform vec3 uWarm;
+uniform vec3 uWin1; uniform vec3 uWin2; uniform vec3 uWin3; uniform vec3 uWarm;
 varying vec3 vSbWorld;
 ${NOISE}`)
       .replace("#include <color_fragment>", `#include <color_fragment>
@@ -75,7 +77,7 @@ ${o.water ? `{
 ${o.windows ? `#ifdef USE_COLOR
 {
   // windows light up at dusk
-  float d = min(distance(vColor.rgb, uWin1), distance(vColor.rgb, uWin2));
+  float d = min(min(distance(vColor.rgb, uWin1), distance(vColor.rgb, uWin2)), distance(vColor.rgb, uWin3));
   totalEmissiveRadiance += (1.0 - smoothstep(0.015, 0.05, d)) * uNight * uWarm;
 }
 #endif` : ""}`)

@@ -82,7 +82,7 @@ export class World {
     host.appendChild(this.renderer.domElement);
 
     this.scene.background = skyTexture();
-    this.scene.fog = new THREE.Fog(col(C.skyHaze), 80, 160);
+    this.scene.fog = new THREE.Fog(col(C.skyHaze), 80, 215);
 
     this.camera = new THREE.PerspectiveCamera(24, 1, 1, 600);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -311,10 +311,8 @@ export class World {
 
   /** The open country around downtown (no trees or cottages there). */
   private downtownArea(p: V2, c: V2): boolean {
-    const q = sub(p, c);
-    const along = q.x * this.metroDir.x + q.y * this.metroDir.y;
-    const across = Math.abs(-q.x * this.metroDir.y + q.y * this.metroDir.x);
-    return along > this.radius + 12 && across < 6 + (along - this.radius) * 0.75;
+    void c;
+    return !!this.metro && dist(p, this.metro.downtown) < 35;
   }
 
   /** Pollution haze (0..1 per block) and fresh air over the given blocks. */
@@ -787,7 +785,7 @@ export class World {
   /** Title screen: a lower, wider view, so the skyline shows behind the town. */
   titleView() {
     this.cam.loose = true;
-    this.cam.set(this.home.target, this.radius * 3.6, this.home.az, THREE.MathUtils.degToRad(66), true);
+    this.cam.set(this.home.target, this.radius * 3.4, this.home.az, THREE.MathUtils.degToRad(75), true);
   }
 
   /** Back to the starting view of the whole town. */
