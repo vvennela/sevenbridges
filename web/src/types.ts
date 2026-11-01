@@ -216,6 +216,6 @@ export interface GenerateReply {
 export type Request =
   | { cmd: "puzzle" }
   | { cmd: "demo" }
-  | { cmd: "newPuzzle"; seed: number; size?: "easy" | "medium" | "hard" }
+  | { cmd: "newPuzzle"; seed: number; size?: "easy" | "medium" | "hard"; replay?: boolean }
   | { cmd: "evaluate"; solution: Solution; rate?: boolean }
   | { cmd: "solve" };

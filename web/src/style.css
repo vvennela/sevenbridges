@@ -358,3 +358,18 @@ body.pc-open .tray { transform: translateX(calc(-50% - 140px)); }
 .vp.center { background: #fff; box-shadow: inset 0 0 0 2px #ECE9F4; }
 body.titling #viewpad, body.titling #legend { display: none !important; }
 body[data-lens="air"] .postcard { top: calc(var(--pc-top, 356px) + 46px); }
+
+/* view solution */
+.linkish { border: none; background: none; padding: 4px 0; color: var(--ink-soft); font-size: 12.5px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #D8D4E6; }
+.linkish:hover { color: var(--ink); }
+.town-foot { margin-top: 6px; padding-top: 6px; border-top: 1.5px solid #F1EFF7; }
+.revealed-note { font-size: 12.5px; color: var(--ink-soft); font-weight: 700; }
+.postcard > .linkish { display: block; margin: 8px auto 0; }
+.confirm { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(46,58,89,0.18); z-index: 40; }
+.confirm-card { background: var(--panel); border: 2px solid #fff; box-shadow: var(--shadow); border-radius: 24px; padding: 20px 24px; width: min(380px, 92vw); text-align: center; animation: rise 0.3s cubic-bezier(.2,1.3,.4,1); }
+.confirm-card h3 { font-family: "Fredoka", sans-serif; font-weight: 600; font-size: 22px; margin: 0 0 6px; }
+.confirm-card p { margin: 0 0 16px; color: var(--ink-soft); font-weight: 600; }
+.confirm-btns { display: flex; gap: 10px; justify-content: center; }
+.btn.next { flex: 1; background: radial-gradient(circle at 35% 30%, #FFE08A, var(--sun) 60%); box-shadow: 0 3px 0 var(--sun-deep); color: var(--ink); font-size: 16px; }
+.build.next { font-size: 17px; line-height: 1.05; }
+.tray.locked .tile { opacity: 0.45; }

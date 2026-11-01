@@ -648,11 +648,14 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
   const occ: Occ = ctx.keepClear ? [{ p: ctx.keepClear, rad: 0.6 }] : [];
   const clearOf = (p: V2, rad: number) => free(occ, p, rad);
   const push = (obj: THREE.Group, delay: number) => out.push({ obj, delay });
+  /** Lawns, gardens, paths and small props: not a building footprint (the scene checks use this). */
+  const pushYard = (obj: THREE.Group, delay: number) => { obj.userData.yard = true; out.push({ obj, delay }); };
   const area = inset(poly, 0.3); // inside the sidewalk ring
   const spots = ctx.spots;
   /** Does a w×d footprint at p facing n fit inside the block and clear of other things? */
-  const fits = (p: V2, n: V2, w: number, d: number, pad = 0.05) => rect(p, n, w + pad * 2, d + pad * 2).every((q) => pointInPolygon(q, area)) && clearOf(p, Math.hypot(w, d) / 2 * 0.8);
-  const claim = (p: V2, w: number, d: number) => occ.push({ p, rad: Math.hypot(w, d) / 2 * 0.95 });
+  // buildings keep a little gap: their full half-diagonal must be clear of everything claimed
+  const fits = (p: V2, n: V2, w: number, d: number, pad = 0.05) => rect(p, n, w + pad * 2, d + pad * 2).every((q) => pointInPolygon(q, area)) && clearOf(p, Math.hypot(w, d) / 2 * 1.02);
+  const claim = (p: V2, w: number, d: number) => occ.push({ p, rad: Math.hypot(w, d) / 2 * 1.02 });
   /** A short paved path from a front door to the sidewalk. */
   const path = (g: GB, f0: V2, f1: V2, wid = 0.1) => {
     const dn = norm(sub(f1, f0)), pn = v2(-dn.y * wid, dn.x * wid);
@@ -692,8 +695,9 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
               const side = v2(e.n.y, -e.n.x);
               const yA = add(add(p, mul(e.n, d / 2 + 0.5)), mul(side, -w / 2 - 0.1)), yB = add(add(p, mul(e.n, d / 2 + 0.5)), mul(side, w / 2 + 0.1));
               const gate = add(p, mul(e.n, d / 2 + 0.5));
-              fence(g, yA, add(gate, mul(side, -0.14)));
-              fence(g, add(gate, mul(side, 0.14)), yB);
+              // fences stay inside the plot (they would poke into the street at narrow corners)
+              if (pointInPolygon(yA, area)) fence(g, yA, add(gate, mul(side, -0.14)));
+              if (pointInPolygon(yB, area)) fence(g, add(gate, mul(side, 0.14)), yB);
               if (rng.chance(0.5)) flowerBed(g, add(add(p, mul(e.n, d / 2 + 0.25)), mul(side, w * 0.3)), rng);
             }
           }
@@ -737,12 +741,14 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
           for (let j = 0; j < k; j++) {
             const at = add(e.m, mul(dir, start + j * wEach));
             const p = add(at, mul(e.n, -(d / 2 + 0.38)));
-            if (!fits(p, e.n, wEach - 0.02, d, 0.0)) continue;
-            addHouse(p, e.n, wEach - 0.02, d);
+            // terraced houses stand wall to wall: check only their own narrow width against what's claimed
+            if (!rect(p, e.n, wEach - 0.02, d).every((q) => pointInPolygon(q, area)) || !clearOf(p, wEach * 0.45)) continue;
+            occ.push({ p, rad: wEach * 0.5 }); push(house(p, e.n, wEach - 0.02, d, floors, rng), houses++ * 0.07);
             path(g, add(p, mul(e.n, d / 2)), add(at, mul(e.n, -0.22)), 0.07);
             // back garden fence
             const back = add(p, mul(e.n, -d / 2 - 0.7));
-            if (pointInPolygon(back, area)) fence(g, add(back, mul(dir, -wEach / 2)), add(back, mul(dir, wEach / 2)));
+            const fa = add(back, mul(dir, -wEach / 2)), fb = add(back, mul(dir, wEach / 2));
+            if (pointInPolygon(fa, area) && pointInPolygon(fb, area)) fence(g, fa, fb);
             if (j % 2 === 0 && rng.chance(0.7)) { const q = add(p, mul(e.n, -d / 2 - 0.35)); if (clearOf(q, 0.1)) bush(g, q, 0.8, rng); }
           }
         }
@@ -750,8 +756,13 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
         const c2 = center;
         if (fits(c2, front.n, 1.8, 1.2)) { veggies(g, c2, front.n, 1.8, 1.2); claim(c2, 1.8, 1.2); }
       }
+      // a block too odd for its template still gets its homes: one near the middle
+      if (!houses) for (const [w, d] of [[1.2, 0.95], [1.0, 0.85], [0.85, 0.75]] as const) {
+        const p = centroid(area);
+        if (rect(p, front.n, w, d).every((q) => pointInPolygon(q, area))) { addHouse(p, front.n, w, d); break; }
+      }
       scatter(g, area, occ, rng, [["tree", 0.35], ["bush", 0.15], ["flowers", 0.22], ["bench", 0.1]], spots, center);
-      push(group(g, null, center), 0.3);
+      pushYard(group(g, null, center), 0.3);
       break;
     }
     case "office": {
@@ -759,22 +770,29 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
       const g = new GB();
       lawn(g, area, TILE_TOP);
       const n = front.n;
-      if (tpl === 1) {
+      /** The tower footprint (with its plinth) fits the plot. */
+      const towerFits = (p: V2, s0: number) => rect(p, n, s0 * 1.1, s0 * 0.95).every((q) => pointInPolygon(q, area));
+      const side0 = v2(n.y, -n.x);
+      const twinS = Math.min(1.8, Math.max(1.15, r * 0.62));
+      const tplUse = tpl === 1 && [-1, 1].every((k) => towerFits(add(center, mul(side0, k * twinS * 0.95)), twinS)) ? 1 : tpl === 1 ? 0 : tpl;
+      if (tplUse === 1) {
         // twin towers on a shared plaza, a fountain between them
-        const s = Math.min(1.8, Math.max(1.15, r * 0.62));
-        const side = v2(n.y, -n.x);
+        const s = twinS;
+        const side = side0;
         const gap = s * 0.95;
         g.prism(rect(center, n, s * 3.4, s * 1.7), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
         for (const k of [-1, 1]) { const p = add(center, mul(side, k * gap)); push(tower(p, n, s, floors, rng), k > 0 ? 0.1 : 0); occ.push({ p, rad: s * 0.72 }); }
         const fg = new GB();
         fountain(g, fg, add(center, mul(n, s * 0.45)), 0.75);
         occ.push({ p: center, rad: s * 1.6 });
-        if (!fg.empty) push(group(fg, null, center), 0.3);
+        if (!fg.empty) pushYard(group(fg, null, center), 0.3);
       } else {
         // one tower; tpl 2 sets it toward the street and adds a parking lot behind
-        const s = Math.min(2.2, Math.max(1.3, r * 0.9)) * (tpl === 2 ? 0.85 : 1);
-        const p = tpl === 2 ? add(center, mul(n, Math.min(r * 0.35, 1.2))) : center;
-        push(tower(p, n, s, floors, rng), 0);
+        let s = Math.min(2.2, Math.max(1.3, r * 0.9)) * (tplUse === 2 ? 0.85 : 1);
+        let p = tplUse === 2 ? add(center, mul(n, Math.min(r * 0.35, 1.2))) : center;
+        // a small or odd plot gets a slimmer tower in its middle
+        if (!towerFits(p, s)) { p = centroid(area); while (s > 0.8 && !towerFits(p, s)) s *= 0.9; }
+        if (towerFits(p, s)) push(tower(p, n, s, floors, rng), 0);
         occ.push({ p, rad: s * 0.72 });
         g.prism(rect(p, n, s * 1.7, s * 1.55), TILE_TOP, TILE_TOP + 0.05, col(C.plot), col(C.plot));
         occ.push({ p, rad: s * 0.95 });
@@ -782,7 +800,7 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
         if (fits(lotP, n, s * 1.6, 1.0)) { parkingLot(g, lotP, n, s * 1.6, 1.0, rng); claim(lotP, s * 1.6, 1.0); }
       }
       scatter(g, area, occ, rng, [["tree", 0.3], ["planter", 0.15], ["bench", 0.15], ["flowers", 0.18], ["bush", 0.1]], spots, center, 0.75);
-      push(group(g, null, center), 0.3);
+      pushYard(group(g, null, center), 0.3);
       break;
     }
     case "shop": {
@@ -825,7 +843,7 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
         }
       }
       scatter(g, area, occ, rng, [["tree", 0.3], ["bench", 0.18], ["flowers", 0.2], ["bush", 0.12]], spots, center, 0.75);
-      push(group(g, null, center), 0.3);
+      pushYard(group(g, null, center), 0.3);
       break;
     }
     case "food": {
@@ -865,13 +883,21 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
       const back = add(center, mul(front.n, -r * 0.35));
       if (clearOf(back, 0.6)) { for (let k = 0; k < 2; k++) { const q = add(back, mul(v2(front.n.y, -front.n.x), (k - 0.5) * 0.7)); if (clearOf(q, 0.2)) { terraceTable(g, q, rng, spots, false); occ.push({ p: q, rad: 0.3 }); } } }
       scatter(g, area, occ, rng, [["tree", 0.32], ["flowers", 0.25], ["bush", 0.15], ["bench", 0.08]], spots, center, 0.75);
-      push(group(g, null, center), 0.3);
+      pushYard(group(g, null, center), 0.3);
       break;
     }
     case "bar": {
-      const tpl = pickTemplate(ctx, 2);
+      let tpl = pickTemplate(ctx, 2);
+      let bw = Math.min(1.6, r * 0.8), bd = Math.min(1.2, r * 0.6);
+      // the bar itself must fit the plot (small or odd plots get a smaller bar)
+      for (let k = 0; k < 6 && !rect(center, E[0].n, bw * 1.1, bd * 1.1).every((q) => pointInPolygon(q, area)); k++) { bw *= 0.88; bd *= 0.88; }
+      if (tpl === 1) {
+        // the beer garden needs room in front of the bar; otherwise a patio
+        const p1 = add(front.m, mul(front.n, -(bd / 2 + 0.5))), n1 = mul(front.n, -1);
+        const gc1 = add(p1, mul(n1, bd / 2 + 1.1));
+        if (!rect(gc1, n1, 2.7, 1.9).every((q) => pointInPolygon(q, area)) || !rect(p1, n1, bw, bd).every((q) => pointInPolygon(q, area))) tpl = 0;
+      }
       const e = tpl === 0 ? E[0] : front;
-      const bw = Math.min(1.6, r * 0.8), bd = Math.min(1.2, r * 0.6);
       const p = tpl === 0 ? center : add(e.m, mul(e.n, -(bd / 2 + 0.5)));
       const n = tpl === 0 ? e.n : mul(e.n, -1); // the beer garden bar faces into its garden
       const { m, g, top } = bar(p, n, bw, bd);
@@ -916,7 +942,7 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
       hedges(yard, area, occ, rng);
       scatter(yard, area, occ, rng, [["tree", 0.3], ["flowers", 0.3], ["bench", 0.15], ["bush", 0.15]], spots, center);
       push(group(m, g, p), 0);
-      push(group(yard, null, center), 0.2);
+      pushYard(group(yard, null, center), 0.2);
       break;
     }
     case "park": {
@@ -966,15 +992,15 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
         }
       }
       scatter(m, inset(poly, 0.16), occ, rng, [["tree", 0.55], ["bush", 0.12], ["flowers", 0.15], ["bench", 0.1]], spots, center, 0.7);
-      push(group(m, glow.empty ? null : glow, center), 0);
+      pushYard(group(m, glow.empty ? null : glow, center), 0);
       break;
     }
     default: {
       // an open lot: fresh green plot, dashed outline, a "+" sign and a few wildflowers
-      if (!ctx.fixed) push(dashedOutline(poly), 0);
+      if (!ctx.fixed) pushYard(dashedOutline(poly), 0);
       const e = E[0];
       const p = add(add(e.m, mul(e.n, -0.5)), mul(norm(sub(e.b, e.a)), Math.min(0.8, e.len * 0.25)));
-      push(signPost(p, e.n, "open"), 0.05);
+      pushYard(signPost(p, e.n, "open"), 0.05);
       const m = new GB();
       // soft grass tufts all over the plot
       const inner = inset(poly, 0.35);
@@ -993,7 +1019,22 @@ export function makeBuilding(b: Building, ctx: BuildCtx): Piece[] {
         }
         spots?.strolls.push(q);
       }
-      if (!m.empty) push(group(m, null, center), 0.1);
+      if (!m.empty) pushYard(group(m, null, center), 0.1);
+    }
+  }
+  // a block too odd for its template still shows its building (kind and floors stay readable)
+  if (b.kind !== "empty" && b.kind !== "park" && !out.some((pc) => !pc.obj.userData.yard)) {
+    const c = centroid(area), n = E[0].n;
+    for (const k2 of [1, 0.8, 0.62]) {
+      const w = 1.2 * k2, d = 0.95 * k2;
+      if (!rect(c, n, w, d).every((q) => pointInPolygon(q, area))) continue;
+      const g = b.kind === "housing" ? house(c, n, w, d, floors, rng)
+        : b.kind === "office" ? tower(c, n, Math.min(w, d), floors, rng)
+        : b.kind === "shop" ? shop(c, n, w, d, floors, rng, C.coral)
+        : b.kind === "food" ? eatery(c, n, w, d, floors, rng, "cafe")
+        : group(bar(c, n, w, d).m, bar(c, n, w, d).g, c);
+      push(g, 0);
+      break;
     }
   }
   return out;

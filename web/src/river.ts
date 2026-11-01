@@ -34,9 +34,19 @@ export function buildRiver(scene: THREE.Scene, pts: V2[], segs: { a: number; b: 
   for (const i of river) for (const k of [segs[i].a, segs[i].b]) ends.set(k, (ends.get(k) ?? 0) + 1);
   for (const [k, n] of ends) {
     if (n !== 1 || !outerPts.has(k)) continue;
-    let p = pts[k], ang = Math.atan2(p.y - center.y, p.x - center.x);
+    // leave straight out of town: along the outward normal of the ring road at this point
+    const ring = segs.filter((sg) => (sg.a === k || sg.b === k) && outerPts.has(sg.a) && outerPts.has(sg.b) && !river.some((i) => segs[i] === sg)).map((sg) => pts[sg.a === k ? sg.b : sg.a]);
+    let out = norm(sub(pts[k], center));
+    if (ring.length === 2) {
+      const t = norm(sub(ring[1], ring[0]));
+      let nrm = v2(-t.y, t.x);
+      if (nrm.x * out.x + nrm.y * out.y < 0) nrm = mul(nrm, -1);
+      out = nrm;
+    }
+    let p = pts[k], ang = Math.atan2(out.y, out.x);
     for (let s = 0; s < 40; s++) {
-      ang += Math.sin(s * 0.4 + k) * 0.08;
+      // a gentle meander only once clear of the ring road
+      if (s > 3) ang += Math.sin(s * 0.4 + k) * 0.08;
       const q = add(p, v2(Math.cos(ang) * 0.9, Math.sin(ang) * 0.9));
       lines.push([p, q]);
       p = q;
@@ -154,17 +164,24 @@ function bridgeModel(a: V2, b: V2): THREE.Group {
       const arch = (t: number) => 0.03 + Math.sin(((t - 0.12) / 0.76) * Math.PI) * 0.2;
       m.quad(w3(p0, arch(t0)), w3(p1, arch(t1)), w3(p1, bridgeY(t1) - 0.1), w3(p0, bridgeY(t0) - 0.1), stone, [d.x * s, 0, -d.y * s]);
     }
-    // short road stubs from each bridge end along the bank, where the street used to run
+    // approach ramps from each deck end down onto the street it joins
     for (const t of [0, 1]) {
-      const e = add(mid, mul(n, (t - 0.5) * span));
-      void e;
-      for (const end of [a, b]) {
-        // a paved lane along the sandy bank, from the street corner to the bridge
-        const s = t ? 1 : -1;
-        const p0 = add(end, mul(n, s * BANK_LANE)), p1 = add(mid, mul(n, s * BANK_LANE));
-        const dd = norm(sub(p1, p0)), nn = v2(-dd.y * 0.2, dd.x * 0.2);
-        m.quad(w3(add(p0, nn), 0.036), w3(add(p1, nn), 0.036), w3(sub(p1, nn), 0.036), w3(sub(p0, nn), 0.036), road, [0, 1, 0]);
-      }
+      const sgn = t ? 1 : -1;
+      const e = add(mid, mul(n, sgn * span / 2)), f = add(mid, mul(n, sgn * (span / 2 + 0.35)));
+      const ww = mul(d, width / 2 - 0.04);
+      m.quad(w3(add(e, ww), bridgeY(t)), w3(sub(e, ww), bridgeY(t)), w3(sub(f, ww), 0.03), w3(add(f, ww), 0.03), road, [0, 1, 0]);
+    }
+    // a paved promenade along the far bank, from the bridge to the other end of the segment
+    // (buses and walkers follow it; it replaces the street the river took)
+    // quays on both banks (one leads the way on, the other is a place to stroll)
+    const sd = norm(sub(b, a));
+    let qn = v2(-sd.y, sd.x);
+    if (qn.x * n.x + qn.y * n.y < 0) qn = mul(qn, -1);
+    for (const sgn of [1, -1]) {
+      const atA = dist(mid, a) < dist(mid, b);
+      const p0 = add(mid, mul(qn, sgn * BANK_LANE)), p1 = add(atA ? b : a, mul(qn, sgn * BANK_LANE));
+      const dd = norm(sub(p1, p0)), nn = v2(-dd.y * 0.2, dd.x * 0.2);
+      m.quad(w3(add(p0, nn), 0.036), w3(add(p1, nn), 0.036), w3(sub(p1, nn), 0.036), w3(sub(p0, nn), 0.036), road, [0, 1, 0]);
     }
   }
   const mat = ghost

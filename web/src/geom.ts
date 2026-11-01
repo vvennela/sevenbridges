@@ -47,7 +47,7 @@ export function centroid(p: V2[]): V2 {
 }
 
 /** Is a CCW polygon convex (allowing nearly straight corners)? */
-function isConvex(p: V2[]): boolean {
+export function isConvex(p: V2[]): boolean {
   const n = p.length;
   for (let i = 0; i < n; i++) {
     const a = p[i], b = p[(i + 1) % n], c = p[(i + 2) % n];
@@ -98,6 +98,11 @@ export function inset(p: V2[], d: number): V2[] {
 /** Move each edge of a CCW polygon inward by its own distance ds[i] (edge i = p[i]→p[i+1]). */
 export function insetEdges(p: V2[], ds: number[]): V2[] {
   if (p.length > 3 && isConvex(p)) return clipInset(p, ds);
+  // concave: mitred offset, then pull any corner that ended up outside back inside
+  const c = centroid(p);
+  return insetEdgesRaw(p, ds).map((q) => { let r = q; for (let k = 0; k < 12 && !pointInPolygon(r, p); k++) r = add(c, mul(sub(r, c), 0.85)); return r; });
+}
+function insetEdgesRaw(p: V2[], ds: number[]): V2[] {
   const n = p.length;
   return p.map((cur, i) => {
     const pi = (i - 1 + n) % n;
@@ -263,4 +268,28 @@ export function smoothClosed(p: V2[], per = 6): V2[] {
     }
   }
   return out;
+}
+
+/** Do two segments cross? */
+export function segmentsCross(a: V2, b: V2, c: V2, d: V2): boolean {
+  const o = (p: V2, q: V2, r: V2) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+}
+
+/** Does a polygon touch any strip (a segment with a half-width)? */
+export function polyHitsStrips(poly: V2[], strips: { a: V2; b: V2; hw: number }[]): boolean {
+  for (const s of strips) {
+    if (poly.some((p) => segDist(p, s.a, s.b) < s.hw)) return true;
+    if (pointInPolygon(s.a, poly) || pointInPolygon(s.b, poly)) return true;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      if (segmentsCross(p, q, s.a, s.b)) return true;
+      // the strip runs close beside this edge
+      if (Math.min(segDist(s.a, p, q), segDist(s.b, p, q)) < s.hw) return true;
+      // the strip's sides
+      const d = norm(sub(s.b, s.a)), n = v2(-d.y * s.hw, d.x * s.hw);
+      if (segmentsCross(p, q, add(s.a, n), add(s.b, n)) || segmentsCross(p, q, sub(s.a, n), sub(s.b, n))) return true;
+    }
+  }
+  return false;
 }

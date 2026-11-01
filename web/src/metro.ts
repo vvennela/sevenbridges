@@ -102,18 +102,42 @@ export class Metro {
   }
 
   /** Where the metro runs under the town to the station: a dotted line on the ground. */
-  setStation(spot: V2 | null) {
+  setStation(route: V2[] | null) {
     if (this.branch) { this.group.remove(this.branch); this.branch.geometry.dispose(); this.branch = null; }
-    if (!spot) return;
+    this.branchRoute = route ?? [];
+    if (!route || route.length < 2) return;
     const m = new GB();
-    const L = dist(this.portal, spot), d = norm(sub(spot, this.portal)), n = v2(-d.y * 0.07, d.x * 0.07);
-    for (let s = 0.2; s < L - 0.2; s += 0.42) {
-      const a = add(this.portal, mul(d, s)), b = add(this.portal, mul(d, Math.min(L, s + 0.22)));
-      m.quad(w3(add(a, n), 0.24), w3(add(b, n), 0.24), w3(sub(b, n), 0.24), w3(sub(a, n), 0.24), col(SUBWAY_COLOR), [0, 1, 0]);
+    // dashes along the streets the metro runs under
+    let carry = 0;
+    for (let k = 1; k < route.length; k++) {
+      const A = route[k - 1], B = route[k], L = dist(A, B), d = norm(sub(B, A)), n = v2(-d.y * 0.07, d.x * 0.07);
+      if (carry >= L) { carry -= L; continue; }
+      for (let s = carry; s < L; s += 0.42) {
+        const a = add(A, mul(d, s)), b = add(A, mul(d, Math.min(L, s + 0.22)));
+        m.quad(w3(add(a, n), 0.05), w3(add(b, n), 0.05), w3(sub(b, n), 0.05), w3(sub(a, n), 0.05), col(SUBWAY_COLOR), [0, 1, 0]);
+        carry = s + 0.42 - L;
+      }
     }
     this.branch = new THREE.Mesh(m.build(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false }));
     this.branch.renderOrder = 4;
     this.group.add(this.branch);
+  }
+
+  /** The dotted metro line under town, as drawn (for the scene checks). */
+  private branchRoute: V2[] = [];
+  branchPts(): V2[] { return this.branchRoute; }
+
+  /** The downtown road: from the meadow beside the viaduct into downtown. */
+  get roadA(): V2 { return add(this.portal, add(mul(this.dir, 8), mul(v2(-this.dir.y, this.dir.x), 1.6))); }
+  get roadB(): V2 { return add(this.downtown, mul(v2(-this.dir.y, this.dir.x), 1.6)); }
+
+  /** Strips that must stay clear of buildings and trees: the viaduct with a margin
+   * (from just inside the tunnel portal to the station), and the downtown road. */
+  corridor(): { a: V2; b: V2; hw: number }[] {
+    return [
+      { a: add(this.portal, mul(this.dir, -0.6)), b: this.line[0], hw: 0.42 + 0.5 },
+      { a: this.roadA, b: this.roadB, hw: 0.35 + 0.3 },
+    ];
   }
 
   /** Is a plan point near the viaduct (keeps trees out from under it)? */
@@ -242,13 +266,14 @@ export class Metro {
     }
     // streets on the ground, and a road leading in beside the metro
     const road = (a: V2, b: V2, wd: number) => { const d0 = norm(sub(b, a)), n = v2(-d0.y * wd / 2, d0.x * wd / 2); g.quad(w3(add(a, n), 0.02), w3(add(b, n), 0.02), w3(sub(b, n), 0.02), w3(sub(a, n), 0.02), col(C.road), [0, 1, 0]); };
-    road(add(this.portal, add(mul(dir, 8), mul(side, 1.6))), add(D, mul(side, 1.6)), 0.7);
+    road(this.roadA, this.roadB, 0.7);
     for (const rr of [9, 16, 24]) for (let k = 0; k < 36; k++) {
       const a0 = (k / 36) * Math.PI * 2, a1 = ((k + 1) / 36) * Math.PI * 2;
       road(add(D, v2(Math.cos(a0) * rr, Math.sin(a0) * rr)), add(D, v2(Math.cos(a1) * rr, Math.sin(a1) * rr)), 0.5);
     }
     g.prism(Array.from({ length: 40 }, (_, k) => add(D, v2(Math.cos((k / 40) * 6.283) * 33, Math.sin((k / 40) * 6.283) * 33))), -0.005, 0.005, soft("#C9DDB2", 0.1), soft("#C9DDB2", 0.1));
     const mesh = new THREE.Mesh(g.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, fog: false }), { windows: true }));
+    mesh.userData.tag = "downtown";
     this.group.add(mesh);
     // aviation lights on the tallest, blinking
     this.beacons = new THREE.InstancedMesh(new THREE.SphereGeometry(0.16, 8, 6), new THREE.MeshBasicMaterial({ color: col("#FF4A3D"), toneMapped: false }), Math.max(1, beacons.length));

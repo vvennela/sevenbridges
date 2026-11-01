@@ -30,6 +30,8 @@ interface State {
   routesOn: boolean[];
   station: number | null;
   mode: "edit" | "built";
+  /** The best plan has been shown: the level is locked (only "Next town"). */
+  revealed: boolean;
   live: EvalReply | null;    // latest evaluate (cost, feelings, trips; the rating stays hidden)
   built: EvalReply | null;   // evaluate at the last Build (with the rating)
   tool: Tool;
@@ -40,11 +42,22 @@ interface State {
 
 const st: State = {
   pr: null, build: [], routesOn: [], station: null, mode: "edit", live: null, built: null,
-  tool: null, error: null, postcardOpen: false, bridges: [],
+  tool: null, error: null, postcardOpen: false, bridges: [], revealed: false,
 };
 
 const world = new World($("scene"));
 const engine = new Engine(engineUrl());
+/** `?test`: the last solution sent to the engine, and its reply. */
+let lastSent: { solution: Solution; reply: EvalReply | null } | null = null;
+{
+  const ev = engine.evaluate.bind(engine);
+  engine.evaluate = async (solution: Solution, rate = false) => {
+    const sent = JSON.parse(JSON.stringify(solution)) as Solution;
+    const reply = await ev(solution, rate);
+    lastSent = { solution: sent, reply };
+    return reply;
+  };
+}
 let thumbs: Record<string, string> = {};
 
 // ---------- helpers ----------
@@ -253,7 +266,7 @@ async function newTown(seed: number, size: Size, fresh = false): Promise<{ pr: P
   // Each request already tries up to 3 maps, so 2 requests (6 maps) is plenty and caps the wait.
   for (let s2 = seed, tries = 0; tries < 2; s2 = fresh ? randomSeed() : s2 + 1, tries++) {
     if (tries > 0) { const w = document.getElementById("wait-text"); if (w) w.textContent = "Still building your town…"; }
-    const g = await engine.newPuzzle(s2, size);
+    const g = await engine.newPuzzle(s2, size, !fresh);
     if (g.generated && g.puzzle) {
       const pz = g.puzzle.puzzle;
       const v = g.verified;
@@ -355,7 +368,7 @@ function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
   if (info) markPlayed(info.seed);
   pickSize = info?.size ?? pickSize;
   st.pr = pr;
-  st.mode = "edit"; st.live = null; st.built = null; st.tool = null; st.station = null; st.postcardOpen = false;
+  st.mode = "edit"; st.live = null; st.built = null; st.tool = null; st.station = null; st.postcardOpen = false; st.revealed = false;
   const pz = pr.puzzle;
   st.bridges = (pz.bridgeSites ?? []).map(() => false);
   // Lean may send `fixed: []` (no starting blocks): every block starts as an open lot
@@ -377,6 +390,8 @@ function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
   renderTown();
   renderViewPad();
   render();
+  // a town whose best plan was already shown stays locked (and shows it again)
+  if (level && revealedTowns().has(level.seed)) { $("loading").classList.add("gone"); void reveal(); return; }
   showIntro();
   $("loading").classList.add("gone");
   void refreshLive();
@@ -603,7 +618,72 @@ function setBlock(i: number, b: Building) {
   coach();
 }
 
-const canEdit = () => !!st.pr && st.mode === "edit";
+const canEdit = () => !!st.pr && st.mode === "edit" && !st.revealed;
+
+// ---------- the best plan ("View solution") ----------
+
+const REVEALED_KEY = "sb-revealed-towns";
+const revealedTowns = (): Set<number> => { try { return new Set(JSON.parse(localStorage.getItem(REVEALED_KEY) ?? "[]") as number[]); } catch { return new Set(); } };
+function markRevealed(seed: number) { const s2 = revealedTowns(); s2.add(seed); localStorage.setItem(REVEALED_KEY, JSON.stringify([...s2].slice(-2000))); }
+
+/** Ask first: seeing the best plan ends this town. */
+function askReveal() {
+  if (!st.pr || st.revealed) return;
+  setHTML("confirm", `<div class="confirm-card">
+    <h3>Show the best plan?</h3>
+    <p>You'll move on to the next town after.</p>
+    <div class="confirm-btns"><button class="btn" data-act="reveal-no">Keep playing</button><button class="btn primary" data-act="reveal-yes">Show it</button></div></div>`);
+  $("confirm").classList.remove("hidden");
+}
+
+/** Get the best plan from the engine, draw it, rate it, and lock the level. */
+async function reveal() {
+  $("confirm").classList.add("hidden");
+  if (!st.pr) return;
+  st.revealed = true;
+  if (level) markRevealed(level.seed);
+  st.tool = null;
+  st.mode = "built";
+  st.built = null;
+  st.postcardOpen = true;
+  hideCard();
+  lastHTML.delete("town"); renderTown();
+  render();
+  try {
+    const best = (await engine.solve()).best;
+    if (!best) throw new Error("No plan found");
+    const sol = best.solution;
+    st.build = sol.build;
+    st.routesOn = sol.routesOn;
+    st.station = sol.station;
+    if (sol.bridges) st.bridges = st.bridges.map((_b, k) => !!sol.bridges![k]);
+    world.setBuild(st.build, st.station, true);
+    world.transit?.setRoutes(st.routesOn);
+    world.setBridges(st.bridges);
+    // the rating comes from the engine too
+    const r = mockTypes(await engine.evaluate(solution(), true));
+    st.built = r; st.live = r;
+    restartDay = true;
+    setTimeout(() => { showLife(r); countUp(r.rating?.rating ?? 0); if ((r.rating?.rating ?? 0) >= 100) world.heartBurst(); }, 700);
+  } catch (e) {
+    st.error = (e as Error).message;
+    toast("Couldn't get the best plan right now");
+  }
+  render();
+}
+
+/** One short line on why the best plan works, from its report: the building that adds most. */
+function bestWhy(r: EvalReply): string {
+  const pz = st.pr!.puzzle;
+  const top = [...(r.report.blocks ?? [])].sort((a, b) => b.scoreImpact - a.scoreImpact)[0];
+  if (!top) return "";
+  const b = st.build[top.block];
+  const helps = (top.neighbors ?? []).filter((n) => n.change < 0).map((n) => n.block);
+  const kind = KIND_NAME[b.kind].toLowerCase();
+  const near = helps.length ? `, and it helps block${helps.length > 1 ? "s" : ""} ${helps.map((j) => j + 1).join(" and ")} next door` : "";
+  void pz;
+  return `The ${kind} on block ${top.block + 1} ${kind.endsWith("s") ? "add" : "adds"} the most (+${top.scoreImpact})${near}.`;
+}
 
 /** Left-click builds or raises; right-click lowers, and clears at the lowest level. */
 function editBlock(i: number, up: boolean, useTool: boolean) {
@@ -683,6 +763,7 @@ async function build() {
 }
 
 function keepBuilding() {
+  if (st.revealed) return;
   st.mode = "edit";
   st.postcardOpen = false;
   world.setBuild(st.build, st.station);
@@ -734,7 +815,8 @@ function renderTown() {
       <button class="icon-btn" data-act="title" data-tip="Back to the title screen">${ICON.home()}</button></span></div>
     <div class="diff-row">${chips}</div>
     <p class="goal">Make your cats happy and your town productive, within budget.</p>
-    ${rows}`);
+    ${rows}
+    <div class="town-foot">${st.revealed ? `<span class="revealed-note">You've seen the best plan for this town.</span>` : `<button class="linkish" data-act="reveal">View solution</button>`}</div>`);
 }
 
 const COLOR_NAMES = ["mustard", "teal", "plum", "olive", "coral"];
@@ -820,10 +902,12 @@ function renderTray() {
       data-tip="Bridge${nb.bridgeCost !== undefined ? `: ${money(nb.bridgeCost)}` : ""}. Blocks across the river are neighbors only when a bridge joins them, and buses need one to cross. Pick it, then click a faint bridge on the river.">
       <span class="tile-icon">${ICON.bridge()}</span><span class="tile-name">Bridge</span>${nb.bridgeCost !== undefined ? `<span class="tile-price">${money(nb.bridgeCost)}</span>` : `<span class="led"></span>`}</button>` : "";
   setHTML("transit", bus + sub + bridgeTile);
-  $("tray").dataset.hint = st.mode === "built" ? "Press Edit to change your plan" : "";
+  $("tray").dataset.hint = st.revealed ? "" : st.mode === "built" ? "Press Edit to change your plan" : "";
   const b = $<HTMLButtonElement>("build");
-  b.classList.toggle("again", st.mode === "built");
-  b.querySelector(".build-label")!.textContent = st.mode === "edit" ? "Build" : "Edit";
+  b.classList.toggle("again", st.mode === "built" && !st.revealed);
+  b.classList.toggle("next", st.revealed);
+  b.querySelector(".build-label")!.textContent = st.revealed ? "Next town" : st.mode === "edit" ? "Build" : "Edit";
+  $("tray").classList.toggle("locked", st.revealed);
 }
 
 // ---------- the postcard after Build ----------
@@ -839,9 +923,9 @@ function notesFrom(r: EvalReply): { headline: string; notes: Note[] } {
     for (const x of res) for (const f of pick(x.group, x.has)) m.set(`${x.group}:${f}`, (m.get(`${x.group}:${f}`) ?? 0) + x.people);
     return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => { const [g, f] = k.split(":"); return { g: Number(g), f }; });
   };
-  const loves = tally((g, has) => pz.groups[g].cares.filter((f) => has.includes(f)));
-  const wishes = tally((g, has) => pz.groups[g].cares.filter((f) => !has.includes(f)));
-  const dislikes = tally((g, has) => pz.groups[g].hates.filter((f) => has.includes(f)));
+  const loves = tally((g, has) => (pz.groups[g]?.cares ?? []).filter((f) => has.includes(f)));
+  const wishes = tally((g, has) => (pz.groups[g]?.cares ?? []).filter((f) => !has.includes(f)));
+  const dislikes = tally((g, has) => (pz.groups[g]?.hates ?? []).filter((f) => has.includes(f)));
   const name = (g: number) => plural(pz.groups[g]?.name ?? "Residents");
   let headline = "";
   if (!r.valid) headline = r.problems.length > 1 ? "A few things need fixing first" : "One thing needs fixing first";
@@ -864,8 +948,18 @@ function renderPostcard() {
   el.classList.toggle("hidden", !show);
   document.body.classList.toggle("pc-open", show);
   if (!show) return;
-  if (!r) { setHTML("postcard", `<div class="pc-wait">Rating your neighborhood…</div>`); return; }
+  if (!r) { setHTML("postcard", `<div class="pc-wait">${st.revealed ? "Finding the best plan…" : "Rating your neighborhood…"}</div>`); return; }
   const rating = r.rating?.rating ?? 0;
+  if (st.revealed) {
+    setHTML("postcard", `
+      <div class="pc-stamp">The best plan for this town</div>
+      <div class="pc-stars">${[50, 80, 100].map((th) => `<span class="star big">${ICON.star(rating >= th)}</span>`).join("")}</div>
+      <div class="pc-sub">Rated ${rating} out of 100.</div>
+      <div class="pc-head">${esc(bestWhy(r))}</div>
+      ${whyRating(r)}
+      <div class="pc-actions"><button class="btn next" data-act="next">Next town</button></div>`);
+    return;
+  }
   const { headline, notes } = notesFrom(r);
   const stars = [50, 80, 100].map((th) => `<span class="star big">${ICON.star(rating >= th)}</span>`).join("");
   setHTML("postcard", `
@@ -878,6 +972,7 @@ function renderPostcard() {
     <div class="pc-actions">
       <button class="btn primary" data-act="keep">${rating >= 100 ? "Keep building" : "Try for 100"}</button>
     </div>
+    <button class="linkish" data-act="reveal">View solution</button>
     <button class="pc-close" data-act="close-pc" title="Hide">×</button>`);
 }
 
@@ -1201,8 +1296,8 @@ function renderCard(t: Target) {
     const on = drawnBridges()[t.i];
     const [a, b] = world.bridgeBlocks(t.i);
     html = `<div class="card-row"><span class="card-ic">${ICON.bridge()}</span><div>
-        <div class="card-title">${on ? "Bridge" : "A bridge could go here"}</div>
-        <div class="card-sub">${nb.bridgeCost !== undefined ? money(nb.bridgeCost) : ""}${a !== undefined ? `${nb.bridgeCost !== undefined ? ", " : ""}joins blocks ${a + 1} and ${b + 1}` : ""}</div></div></div>
+        <div class="card-title">${on ? "Bridge" : "Bridge here"}</div>
+        <div class="card-sub">${a !== undefined ? `joins block ${a + 1} and block ${b + 1}` : ""}${nb.bridgeCost !== undefined ? ` · ${money(nb.bridgeCost)}` : ""}</div></div></div>
       <div class="card-hint">Blocks across the river only count as neighbors when a bridge joins them.${canEdit() ? ` Click to ${on ? "remove" : "build"} it.` : ""}</div>`;
   } else if (t.kind === "site") {
     const built = s.station === t.i;
@@ -1495,7 +1590,11 @@ document.addEventListener("click", (e) => {
   else if (t.dataset.tool) pickTool(t.dataset.tool as Tool);
   else if (t.dataset.route) toggleRoute(Number(t.dataset.route));
   else switch (t.dataset.act) {
-    case "keep": keepBuilding(); break;
+    case "keep": if (!st.revealed) keepBuilding(); break;
+    case "reveal": askReveal(); break;
+    case "reveal-yes": void reveal(); break;
+    case "reveal-no": $("confirm").classList.add("hidden"); break;
+    case "next": nextTown(); break;
     case "recenter": world.recenter(); break;
     case "close-pc": st.postcardOpen = false; render(); break;
     case "up": if (cardTarget?.kind === "block") editBlock(cardTarget.i, true, false); break;
@@ -1505,7 +1604,9 @@ document.addEventListener("click", (e) => {
   }
   if (cardTarget) renderCard(cardTarget);
 });
-$("build").addEventListener("click", () => (st.mode === "edit" ? void build() : keepBuilding()));
+$("build").addEventListener("click", () => (st.revealed ? nextTown() : st.mode === "edit" ? void build() : keepBuilding()));
+/** A fresh random town of the same size. */
+function nextTown() { void playNew(level?.size ?? pickSize); }
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") { st.tool = null; render(); } });
 
 // ---------- turn and tilt ----------
@@ -1548,6 +1649,56 @@ if (new URLSearchParams(location.search).has("test")) {
     bridgeSites: () => (st.pr?.puzzle.bridgeSites ?? []).map((_s, i) => ({ i, p: world.screenOf({ kind: "bridge", i }) })),
     lookBlock: (i: number, d: number, e: number) => world.lookAt(world.centerOf(i), d, e),
     far: () => world.titleView(),
+    lookPoint: (x: number, y: number, d: number, e: number) => world.lookAt({ x, y }, d, e),
+    facts: () => ({
+      world: world.facts(),
+      day: world.transit?.dayFacts() ?? null,
+      routes: world.transit?.routeFacts() ?? [],
+      roadSegs: world.roadSegs,
+      stationSpots: world.stationSpots,
+      center: world.center,
+      pr: st.pr, level, mode: st.mode,
+      state: { build: st.build, routesOn: st.routesOn, station: st.station, bridges: st.bridges },
+      lastSent, built: st.built,
+    }),
+    /** Place a random layout from the offered options (and random buses and bridges). */
+    placeRandom: (seed: number) => {
+      let a = seed >>> 0;
+      const rnd = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const opts = st.pr!.options.filter((o) => o.building.kind !== "empty");
+      st.build = st.build.map((b, i) => (st.pr!.puzzle.fixed[i] ? b : opts[Math.floor(rnd() * opts.length)].building));
+      st.routesOn = st.routesOn.map(() => rnd() < 0.5);
+      st.bridges = st.bridges.map(() => rnd() < 0.6);
+      const sites = st.pr!.puzzle.stationSites;
+      st.station = sites.length && rnd() < 0.5 ? sites[Math.floor(rnd() * sites.length)] : null;
+      world.setBuild(st.build, st.station);
+      world.transit?.setRoutes(st.routesOn);
+      world.setBridges(st.bridges);
+      render();
+      void refreshLive();
+      return { build: st.build, routesOn: st.routesOn, bridges: st.bridges, station: st.station };
+    },
+    /** Record everything drawn (cats, cars, buses) for `ms` milliseconds, with water and street facts. */
+    record: (ms: number) => new Promise((res) => {
+      const tr = world.transit;
+      if (!tr) { res([]); return; }
+      tr.rec = [];
+      setTimeout(() => {
+        const out = (tr.rec ?? []).map((p) => ({ ...p, water: world.onWater({ x: p.x, y: p.y }) }));
+        tr.rec = null;
+        res(out);
+      }, ms);
+    }),
+    settled: () => world.settled,
+    revealed: () => st.revealed,
+    isBuilt: () => st.mode === "built" && !!st.built,
+    hud: () => ({
+      ring: document.querySelector(".ring-num")?.textContent?.trim() ?? "",
+      pair: [...document.querySelectorAll(".pair-cell b")].map((b) => b.textContent?.trim() ?? ""),
+      money: [...document.querySelectorAll(".bar-row .bar-val")].map((b) => b.textContent?.replace(/\s+/g, "").trim() ?? ""),
+      moneyLabel: document.querySelector(".bar-row .bar-label")?.textContent?.trim() ?? "",
+      text: document.body.innerText,
+    }),
     lookDowntown: (d: number, e: number) => { const m = world.metro; if (m) world.lookAt(m.downtown, d, e); },
     zoom: (k: number) => world.cam.set(world.cam.goal.target, world.cam.goal.dist * k, world.cam.goal.az, world.cam.goal.polar),
     recenter: () => world.recenter(),

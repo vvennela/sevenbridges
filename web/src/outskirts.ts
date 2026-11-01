@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { GB, SHAPES, col, trs, w3 } from "./builder";
 import { MAT_GLOW, MAT_MAIN, TILE_TOP, makeBuilding, type LifeSpots } from "./buildings";
+import { isConvex, polyHitsStrips, segmentsCross } from "./geom";
 import { add, ccw, centroid, dist, inset, mul, norm, pointInPolygon, segDist, sub, v2, type V2 } from "./geom";
 import { C } from "./palette";
 import { Rng } from "./rng";
@@ -26,6 +27,9 @@ export interface Outskirts {
   idle: V2[];
   /** Is this point covered by an outer block or street (keep trees out)? */
   covers: (p: V2) => boolean;
+  /** The outer blocks (built tiles and gardens) and the outer streets, for the scene checks. */
+  polys: V2[][];
+  roads: [V2, V2][];
   /** Is this point on a raised outer tile (cats stand at tile height there)? */
   onTile: (p: V2) => boolean;
 }
@@ -34,7 +38,7 @@ export interface Outskirts {
  * Two rings of city blocks around the town: a dense one, then a thinner one that fades into fields.
  * `avoid(p)` keeps blocks off the river, the metro line and the lanes out of town.
  */
-export function buildOutskirts(parent: THREE.Object3D, outer: V2[], c: V2, seed: number, avoid: (p: V2) => boolean): Outskirts {
+export function buildOutskirts(parent: THREE.Object3D, outer: V2[], c: V2, seed: number, avoid: (p: V2) => boolean, strips: { a: V2; b: V2; hw: number }[] = []): Outskirts {
   const rng = new Rng(seed ^ 0x0c17);
   const group = new THREE.Group();
   parent.add(group);
@@ -75,22 +79,42 @@ export function buildOutskirts(parent: THREE.Object3D, outer: V2[], c: V2, seed:
   };
   const rings = [{ d0: 0.62, d1: 4.3, built: 0.9, step: 3.4 }, { d0: 4.9, d1: 8.4, built: 0.55, step: 3.8 }];
   const kinds: [Kind, number, number][] = [["housing", 0.48, 3], ["shop", 0.14, 2], ["office", 0.1, 3], ["park", 0.12, 1], ["food", 0.08, 1], ["bar", 0.04, 1]];
+  // first all the streets, then the blocks between them (so a block can be checked against every street)
+  // the ring road of the playable town counts too
+  const roadHw: { a: V2; b: V2; hw: number }[] = outer.map((p, i) => ({ a: p, b: outer[(i + 1) % outer.length], hw: 0.31 + 0.08 }));
+  rings.forEach((ring, ri) => {
+    const n = Math.max(6, Math.round(total / ring.step));
+    const len = total / n;
+    for (let k = 0; k < n; k++) {
+      // the road along the outer edge of this ring, and the cross street before this block
+      const ra = at(k * len, ring.d1 + 0.3), rb = at((k + 1) * len, ring.d1 + 0.3);
+      const stripHit = (a: V2, b: V2) => strips.some((st) => segDist(a, st.a, st.b) < st.hw || segDist(b, st.a, st.b) < st.hw || segDist(st.a, a, b) < st.hw || segDist(st.b, a, b) < st.hw || segmentsCross(a, b, st.a, st.b));
+      if (!avoid(ra) && !avoid(rb) && !avoid(add(mul(ra, 0.5), mul(rb, 0.5))) && !stripHit(ra, rb)) { road(ra, rb); roadHw.push({ a: ra, b: rb, hw: ROAD / 2 + 0.06 }); streets.push([ra, rb]); if (k % 2 === 0) { const lp = at(k * len, ring.d1 - 0.05); if (!strips.some((st) => segDist(lp, st.a, st.b) < st.hw) && !avoid(lp)) lamps.push(lp); } }
+      const ca = at(k * len, ring.d0 - 0.3), cb = at(k * len, ring.d1 + 0.3);
+      if (!avoid(ca) && !avoid(cb) && !stripHit(ca, cb)) { road(ca, cb, 0.46); roadHw.push({ a: ca, b: cb, hw: 0.23 + 0.06 }); if (ri === 0 && k % 3 === 0) streets.push([ca, cb]); }
+    }
+  });
   rings.forEach((ring, ri) => {
     const n = Math.max(6, Math.round(total / ring.step));
     const len = total / n;
     for (let k = 0; k < n; k++) {
       const s0 = k * len + 0.3, s1 = (k + 1) * len - 0.3;
-      const poly = ccw([at(s0, ring.d0), at(s1, ring.d0), at(s1, ring.d1), at(s0, ring.d1)]);
+      let poly = ccw([at(s0, ring.d0), at(s1, ring.d0), at(s1, ring.d1), at(s0, ring.d1)]);
+      // where the ring bends inward, neighbouring streets close in: shrink the block until it is clear
+      for (let tries = 0; tries < 4 && polyHitsStrips(poly, roadHw); tries++) poly = inset(poly, 0.15);
+      // where the ring folds in on itself the quad can twist: leave those spots open
+      if (area2(poly) < 1.2 || !isConvex(poly)) continue;
       const mid = centroid(poly);
-      const bad = [...poly, mid].some(avoid);
-      // the road along the outer edge of this ring, and the cross street before this block
-      const ra = at(k * len, ring.d1 + 0.3), rb = at((k + 1) * len, ring.d1 + 0.3);
-      if (!avoid(ra) && !avoid(rb) && !avoid(add(mul(ra, 0.5), mul(rb, 0.5)))) { road(ra, rb); streets.push([ra, rb]); if (k % 2 === 0) lamps.push(at(k * len, ring.d1 - 0.05)); }
-      const ca = at(k * len, ring.d0 - 0.3), cb = at(k * len, ring.d1 + 0.3);
-      if (!avoid(ca) && !avoid(cb)) { road(ca, cb, 0.46); if (ri === 0 && k % 3 === 0) streets.push([ca, cb]); }
+      // nothing built under the viaduct, on the downtown road, on a street, in the water or on the lanes:
+      // test the whole block outline, not just its corners
+      const bad = [...poly, mid].some(avoid) || polyHitsStrips(poly, strips) || polyHitsStrips(poly, roadHw) || poly.some((p, i) => { const q = poly[(i + 1) % poly.length]; return avoid(add(mul(p, 0.5), mul(q, 0.5))); });
       if (bad || !rng.chance(ring.built)) {
-        // gardens and fields where the city thins out
-        if (!bad) { all.prism(inset(poly, 0.1), 0, 0.03, col("#A9D68C"), col("#A6D486")); polys.push(poly); for (let j = 0; j < 3; j++) treeAt(all, add(mid, v2(rng.range(-1, 1), rng.range(-1, 1))), rng); }
+        // gardens and fields where the city thins out (trees only well inside the garden)
+        if (!bad) {
+          all.prism(inset(poly, 0.1), 0, 0.03, col("#A9D68C"), col("#A6D486")); polys.push(poly);
+          const inner = inset(poly, 0.55);
+          for (let j = 0; j < 3; j++) { const q = add(mid, v2(rng.range(-1, 1), rng.range(-1, 1))); if (pointInPolygon(q, inner)) treeAt(all, q, rng); }
+        }
         continue;
       }
       polys.push(poly);
@@ -126,9 +150,12 @@ export function buildOutskirts(parent: THREE.Object3D, outer: V2[], c: V2, seed:
   }
   if (glows.length) { const mg = mergeGeometries(glows.map((g) => (g.index ? g.toNonIndexed() : g))); if (mg) group.add(new THREE.Mesh(mg, MAT_GLOW)); }
   void glow; void MAT_MAIN;
-  const covers = (p: V2) => polys.some((q) => pointInPolygon(p, q)) || roadStrips.some(([a, b]) => segDist(p, a, b) < 0.5);
-  return { group, streets, lamps, idle, covers, onTile: (p: V2) => tiles.some((q) => pointInPolygon(p, q)) };
+  const covers = (p: V2) => polys.some((q) => pointInPolygon(p, q)) || roadStrips.some(([a, b]) => segDist(p, a, b) < 1.1);
+  group.userData.tag = "outer";
+  return { group, streets, lamps, idle, covers, polys, roads: roadStrips, onTile: (p: V2) => tiles.some((q) => pointInPolygon(p, q)) };
 }
+
+const area2 = (p: V2[]) => Math.abs(p.reduce((s, a, i) => { const b = p[(i + 1) % p.length]; return s + a.x * b.y - b.x * a.y; }, 0) / 2);
 
 function treeAt(m: GB, p: V2, rng: Rng) {
   m.sway = 1; m.swayBase = 0.03;

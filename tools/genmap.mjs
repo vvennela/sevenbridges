@@ -366,6 +366,28 @@ function addRiver(m, r, pattern = "across", family = "round") {
   let pool;
   if (pattern === "bend") pool = cands.filter((c) => c.d > Math.PI / 3 && c.d < (2 * Math.PI) / 3);
   else pool = cands.filter((c) => c.d >= (2 * Math.PI) / 3);
+  // no street may leave the river at a shallow angle (it would run under the water)
+  const landAt = new Map();
+  for (const sg of m.segments) if (count.get(sideKey(sg.a, sg.b)) === 2 || count.get(sideKey(sg.a, sg.b)) === 1) for (const v of [sg.a, sg.b]) { if (!landAt.has(v)) landAt.set(v, []); landAt.get(v).push(sg); }
+  const dirOf = (v, sg) => { const w = sg.a === v ? sg.b : sg.a; const dx = P(w).x - P(v).x, dy = P(w).y - P(v).y, L = Math.hypot(dx, dy) || 1; return [dx / L, dy / L]; };
+  const cleanChain = (chain) => {
+    const inChain = new Set(chain);
+    for (const sg of chain) for (const v of [sg.a, sg.b]) {
+      const rd = dirOf(v, sg);
+      for (const o of landAt.get(v) ?? []) {
+        if (inChain.has(o)) continue;
+        // a street that meets the river must be long enough to reach dry land
+        if (Math.hypot(P(o.a).x - P(o.b).x, P(o.a).y - P(o.b).y) < 16) return false;
+        const od = dirOf(v, o);
+        if (rd[0] * od[0] + rd[1] * od[1] > Math.cos((42 * Math.PI) / 180)) return false;
+      }
+    }
+    return true;
+  };
+  const clean = pool.filter((c) => cleanChain(c.chain));
+  if (clean.length) pool = clean;
+  else if (cands.some((c) => cleanChain(c.chain))) pool = cands.filter((c) => cleanChain(c.chain));
+  else return; // no river that keeps clear of the streets: this town has none
   if (!pool.length) pool = cands;
   // every river segment is a bridge site, and each one doubles the plans to check: keep rivers short
   const short = pool.filter((c) => c.chain.length <= (pattern === "fork" ? 4 : 5));

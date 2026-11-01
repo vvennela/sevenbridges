@@ -25,8 +25,8 @@ interface Idler { c: V2; r: number; speed: number; phase: number; mode: IdleMode
 type Prop = "cig" | "beer" | null;
 interface Bus { obj: THREE.Group; route: number; phase: number }
 interface DayPart { kind: "walk" | "car" | "ride"; hidden?: boolean; pts: V2[]; L: number; speed: number; route?: number; board?: V2; alight?: V2; underFirst?: boolean }
-interface DayLeg { t0: number; parts: DayPart[]; ph: number }
-interface DayCat { id: number; legs: DayLeg[]; coat: Coat; fit: Outfit; accent: THREE.Color; carColor: THREE.Color }
+interface DayLeg { t0: number; parts: DayPart[]; ph: number; from: number | null; to: number | null; mode: string }
+interface DayCat { id: number; key: string; home: number; legs: DayLeg[]; coat: Coat; fit: Outfit; accent: THREE.Color; carColor: THREE.Color }
 
 const MAX_PEOPLE = 700, MAX_CARS = 120, MAX_PROPS = 80, MAX_PUFFS = 120, MAX_DUST = 80;
 const CAR_COLORS = ["#FF8B7B", "#9CCAF4", "#9FE2C6", "#CDB6F3", "#FFE19A", "#F7A8C8"];
@@ -127,8 +127,16 @@ export class Transit {
       this.adj[s.b].push({ to: s.a, w, seg: si });
       this.segIndex.set(segKey(s.a, s.b), si);
       this.segEnds[si] = [pts[s.a], pts[s.b]];
+      this.segNodes[si] = [s.a, s.b];
       if (s.terrain === "stream") this.stream.add(si);
     });
+    // river nodes: where streets meet the water; `across` points from one bank to the other
+    const rv = new Map<number, V2[]>();
+    segs.forEach((sg) => { if (sg.terrain !== "stream") return; for (const [u, w] of [[sg.a, sg.b], [sg.b, sg.a]]) rv.set(u, [...(rv.get(u) ?? []), norm(sub(pts[w], pts[u]))]); });
+    for (const [node, dirs] of rv) {
+      const along = dirs.length >= 2 ? norm(sub(dirs[0], dirs[1])) : dirs[0];
+      this.riverNode.set(node, v2(-along.y, along.x));
+    }
     routes.forEach((r, i) => this.makeRoute(r, i));
     for (const [b, p] of stationSpots) this.makeSite(b, p);
 
@@ -315,6 +323,51 @@ export class Transit {
     });
   }
 
+  /** River nodes (in the water) and the direction across the river there. */
+  private riverNode = new Map<number, V2>();
+  /** Which bank a street leaving a river node is on: +1, -1, or 0 (runs along the water). */
+  private bankOf(node: number, toward: V2): number {
+    const ac = this.riverNode.get(node);
+    if (!ac) return 0;
+    const u = norm(sub(toward, this.pts[node])), d = u.x * ac.x + u.y * ac.y;
+    return Math.abs(d) < 0.15 ? 0 : Math.sign(d);
+  }
+  /** Is there a built bridge whose deck stands on this river node? */
+  private bridgeAt(node: number): boolean {
+    const p = this.pts[node];
+    for (const si of this.bridged) { const sg = this.segEnds[si]; if (sg && dist(crossing(sg[0], sg[1]).mid, p) < 1e-6) return true; }
+    return false;
+  }
+  /**
+   * River nodes sit in the middle of the water. A path that turns at one keeps to the bank:
+   * the node is replaced by points on the bank where its streets meet the water (or kept when a
+   * built bridge stands right there and the path crosses it).
+   */
+  private bankRound(pts: V2[]): V2[] {
+    const out: V2[] = [];
+    pts.forEach((V, i) => {
+      let node = -1;
+      for (const [k] of this.riverNode) if (dist(this.pts[k], V) < 1e-6) { node = k; break; }
+      if (node < 0) { out.push(V); return; }
+      const ac = this.riverNode.get(node)!;
+      const P = pts[i - 1], N = pts[i + 1];
+      const bank = (Q: V2) => {
+        const u = norm(sub(Q, V)), c = Math.abs(u.x * ac.x + u.y * ac.y);
+        return add(V, mul(u, Math.min(1.25 / Math.max(0.4, c), dist(Q, V) * 0.48)));
+      };
+      const sP = P ? this.bankOf(node, P) : 0, sN = N ? this.bankOf(node, N) : 0;
+      if (P && N && sP * sN < 0 && this.bridgeAt(node)) { out.push(bank(P), V, bank(N)); return; }
+      if (P) out.push(bank(P));
+      if (P && N) {
+        const uP = norm(sub(P, V)), uN = norm(sub(N, V)), s2 = add(uP, uN);
+        if (uP.x * uN.x + uP.y * uN.y < -0.2 && Math.hypot(s2.x, s2.y) > 0.05) out.push(add(V, mul(norm(s2), 1.3)));
+        else if (uP.x * uN.x + uP.y * uN.y < -0.2) { const sd = sP || sN || 1; out.push(add(V, mul(ac, sd * 1.3))); }
+      }
+      if (N) out.push(bank(N));
+    });
+    return out;
+  }
+
   /** Is a street segment usable (not river, or river with a built bridge)? */
   private passable(seg: number) { return !this.stream.has(seg) || this.bridged.has(seg); }
   /** Can this route run? (Lean also reports it as a problem when it can't.) */
@@ -336,8 +389,11 @@ export class Transit {
         }
         pts.push(this.pts[k]); gaps.push(false);
       });
-      this.routePaths[i] = offsetPolyline(pts, this.routeLane[i]);
-      this.routeGaps[i] = gaps;
+      // keep the ribbon on the banks at river nodes (gaps follow the points they replace)
+      const rp: V2[] = [], rg: boolean[] = [];
+      pts.forEach((q, j) => { const r = this.bankRound([pts[j - 1], q, pts[j + 1]].filter(Boolean) as V2[]); const mine = j === 0 ? r.slice(0, r.length - (pts[j + 1] ? 1 : 0)) : r.slice(1, pts[j + 1] ? r.length - 1 : r.length); for (const x of mine) { rp.push(x); rg.push(gaps[j]); } });
+      this.routePaths[i] = offsetPolyline(rp, this.routeLane[i]);
+      this.routeGaps[i] = rg;
       this.blockedAt[i] = at;
       this.widths[i] = -1; // force the ribbon to rebuild with (or without) its gap
     });
@@ -448,7 +504,8 @@ export class Transit {
     }
   }
 
-  private traffic: { a: V2; b: V2; ph: number; color: THREE.Color; fur: THREE.Color }[] = [];
+  private traffic: { a: V2; b: V2; seg?: number; ph: number; color: THREE.Color; fur: THREE.Color }[] = [];
+  private segNodes: [number, number][] = [];
   private ambientCars: { pts: V2[]; L: number; ph: number; loop: boolean; color: THREE.Color; fur: THREE.Color }[] = [];
   /** Spots in the outer city where a few cats idle (looks only). */
   ambientIdle: V2[] = [];
@@ -481,13 +538,19 @@ export class Transit {
       if (!ends || !this.passable(si)) continue;
       if (used.has(key(ends[0])) || used.has(key(ends[1]))) continue;
       used.add(key(ends[0])); used.add(key(ends[1]));
-      const L = dist(ends[0], ends[1]);
+      // a street that meets the river: cars turn back at the bank, not in the water
+      const nodesOf = this.segNodes[si];
+      let A = ends[0], B = ends[1];
+      if (nodesOf && this.riverNode.has(nodesOf[0])) A = add(A, mul(norm(sub(B, A)), 1.3));
+      if (nodesOf && this.riverNode.has(nodesOf[1])) B = add(B, mul(norm(sub(A, B)), 1.3));
+      if (dist(A, B) < 0.6) continue;
+      const L = dist(A, B);
       // at most 3 cars on a long street, 1 on a short one, evenly spaced around its loop
       const want = exact ? Math.max(1, Math.round(lv)) : Math.max(1, Math.round(lv * 3));
       const n = Math.min(want, L > 3 ? 3 : L > 1.5 ? 2 : 1);
       const L2 = (2 * L) / 0.9;
       const ph0 = rng.range(0, L2);
-      for (let k = 0; k < n; k++) this.traffic.push({ a: ends[0], b: ends[1], ph: ph0 + (k * L2) / n, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
+      for (let k = 0; k < n; k++) this.traffic.push({ a: A, b: B, seg: si, ph: ph0 + (k * L2) / n, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
     }
   }
 
@@ -498,6 +561,20 @@ export class Transit {
   /** Where downtown is (cars with no destination in town drive off this way). */
   downtownDir: V2 = v2(0, 1);
   private day: DayCat[] = [];
+  /** Cats from Lean's day that have nothing drawable (e.g. a day spent downtown). */
+  private dayDropped: string[] = [];
+  /** `?test`: positions drawn this frame (cats, cars, buses), for the scene checks. */
+  rec: { kind: "cat" | "car" | "bus"; x: number; y: number; src: string }[] | null = null;
+  /** `?test`: each route's drawn ribbon path and its street nodes. */
+  routeFacts() { return this.routes.map((_r, i) => ({ nodes: this.routeNodes[i], path: this.routePaths[i], blocked: !!this.blockedAt[i], on: !!this.routesOn[i] })); }
+  /** `?test`: the day as planned for drawing: each cat's legs with their drawn start and end. */
+  dayFacts() {
+    return {
+      drawn: this.day.map((c) => ({ id: c.key, home: c.home, legs: c.legs.map((l) => ({ from: l.from, to: l.to, mode: l.mode, start: l.parts[0]?.pts[0], end: l.parts[l.parts.length - 1]?.pts.at(-1) })) })),
+      dropped: [...this.dayDropped],
+      traffic: this.traffic.map((t) => ({ a: t.a, b: t.b, seg: t.seg ?? -1 })),
+    };
+  }
   private dayStart = 0;
   private now = 0;
 
@@ -513,6 +590,7 @@ export class Transit {
   setDay(cats: CatDay[] | null, routeOf?: (from: number | null, to: number | null) => number | null, restart = false) {
     const hadDay = this.day.length > 0;
     this.day = [];
+    this.dayDropped = [];
     this.busCache.clear();
     if (!cats?.length) return;
     // keep the clock running across edits; start over only when asked (Build) or when there was no day
@@ -550,11 +628,12 @@ export class Transit {
         const room = (ph + 1) * P - t0 - 0.3;
         const need = plan.parts.reduce((a, x) => a + (x.kind === "ride" ? 0 : x.L / x.speed), 0);
         const k = need > room * 0.7 ? need / (room * 0.7) : 1;
-        legs.push({ t0, parts: plan.parts.map((x) => ({ ...x, speed: x.speed * k, hidden: carIdx >= 2 && x.kind === "car" })), ph });
+        legs.push({ t0, parts: plan.parts.map((x) => ({ ...x, speed: x.speed * k, hidden: carIdx >= 2 && x.kind === "car" })), ph, from, to, mode });
         busy[ph] += need / k + 0.5;
       }
       const id = typeof cat.id === "number" ? cat.id : hashId(String(cat.id));
-      if (legs.length) this.day.push({ id, legs, coat, fit, accent, carColor });
+      if (legs.length) this.day.push({ id, key: String(cat.id), home: cat.home, legs, coat, fit, accent, carColor });
+      else this.dayDropped.push(String(cat.id));
     }
   }
 
@@ -577,7 +656,8 @@ export class Transit {
     };
     const A = spot(from, false), B = spot(to, true);
     const parts: DayPart[] = [];
-    const part = (kind: DayPart["kind"], pts: V2[], speed: number, extra: Partial<DayPart> = {}) => {
+    const part = (kind: DayPart["kind"], pts0: V2[], speed: number, extra: Partial<DayPart> = {}) => {
+      const pts = this.bankRound(pts0);
       if (pts.length < 2) return;
       const L = polylineLength(pts);
       if (L > 0.01) parts.push({ kind, pts, L, speed, ...extra });
@@ -887,7 +967,8 @@ export class Transit {
       startNodes = [this.nearestNode(start)];
     }
     const legs: Leg[] = [];
-    const leg = (pts: V2[], speed: number, visible: boolean) => {
+    const leg = (pts0: V2[], speed: number, visible: boolean) => {
+      const pts = this.bankRound(pts0);
       if (pts.length < 2) return;
       const L = polylineLength(pts);
       if (L > 0.01) legs.push({ pts, L, speed, visible });
@@ -916,11 +997,35 @@ export class Transit {
   /** A random spot on a block's sidewalk, and the two corners of that side. */
   private sidewalkSpot(b: number, rng: Rng): { p: V2; nodes: number[] } {
     const cs = this.blockCorners[b];
-    const k = rng.int(0, cs.length - 1);
+    // only sides along a street (not along the river)
+    const sides = cs.map((_c, k) => k).filter((k) => !this.stream.has(this.segIndex.get(segKey(cs[k], cs[(k + 1) % cs.length])) ?? -1));
+    const k = sides.length ? sides[rng.int(0, sides.length - 1)] : rng.int(0, cs.length - 1);
     const a = this.pts[cs[k]], c = this.pts[cs[(k + 1) % cs.length]];
     const onRoad = add(a, mul(sub(c, a), rng.range(0.2, 0.8)));
     const inward = norm(sub(this.blockCenters[b], onRoad));
     return { p: add(onRoad, mul(inward, 0.5)), nodes: [cs[k], cs[(k + 1) % cs.length]] };
+  }
+
+  /** A polyline from a to b along the streets (ignores the river: it runs underground). */
+  streetRoute(a: V2, b: V2): V2[] {
+    const n0 = this.nearestNode(a), n1 = this.nearestNode(b);
+    const { prev } = this.dijkstraAll([n0]);
+    const path: number[] = [];
+    for (let v = n1; v >= 0; v = prev[v]) path.unshift(v);
+    return [a, ...path.map((k) => this.pts[k]), b];
+  }
+  private dijkstraAll(src: number[]) {
+    const n = this.pts.length;
+    const d = new Array<number>(n).fill(Infinity), prev = new Array<number>(n).fill(-1), done = new Array<boolean>(n).fill(false);
+    for (const s of src) d[s] = 0;
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < n; i++) if (!done[i] && d[i] < Infinity && (u < 0 || d[i] < d[u])) u = i;
+      if (u < 0) break;
+      done[u] = true;
+      for (const e of this.adj[u]) if (d[u] + e.w < d[e.to]) { d[e.to] = d[u] + e.w; prev[e.to] = u; }
+    }
+    return { dist: d, prev };
   }
 
   private nearestNode(p: V2): number {
@@ -950,13 +1055,35 @@ export class Transit {
     return { dist: d, prev };
   }
 
+  /** Shortest street path. At a river node a path may only go on along the same bank, unless a
+   * built bridge stands there (it never wades across the water). States: node × bank (0, +1, -1). */
   private streetPath(from: number[], to: number[]): number[] {
-    const { dist: d, prev } = this.dijkstra(from);
-    let best = to[0];
-    for (const k of to) if (d[k] < d[best]) best = k;
-    if (d[best] === Infinity) { this.unreachable = true; return []; }
+    const n = this.pts.length, S = (v: number, b: number) => v * 3 + (b + 1);
+    const d = new Array<number>(n * 3).fill(Infinity), prev = new Array<number>(n * 3).fill(-1), done = new Array<boolean>(n * 3).fill(false);
+    for (const s0 of from) d[S(s0, 0)] = 0;
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < n * 3; i++) if (!done[i] && d[i] < Infinity && (u < 0 || d[i] < d[u])) u = i;
+      if (u < 0) break;
+      done[u] = true;
+      const v = Math.floor(u / 3), bank = (u % 3) - 1;
+      for (const e of this.adj[v]) {
+        if (!this.passable(e.seg)) continue;
+        const water = this.stream.has(e.seg);
+        if (!water && this.riverNode.has(v)) {
+          const out = this.bankOf(v, this.pts[e.to]);
+          if (bank !== 0 && out !== 0 && out !== bank && !this.bridgeAt(v)) continue;
+        }
+        const nb = !water && this.riverNode.has(e.to) ? this.bankOf(e.to, this.pts[v]) : 0;
+        const k = S(e.to, nb);
+        if (d[u] + e.w < d[k]) { d[k] = d[u] + e.w; prev[k] = u; }
+      }
+    }
+    let best = -1;
+    for (const t of to) for (const b of [-1, 0, 1]) { const k = S(t, b); if (d[k] < Infinity && (best < 0 || d[k] < d[best])) best = k; }
+    if (best < 0) { this.unreachable = true; return []; }
     const p: number[] = [];
-    for (let v = best; v >= 0; v = prev[v]) p.unshift(v);
+    for (let k = best; k >= 0; k = prev[k]) p.unshift(Math.floor(k / 3));
     return p;
   }
 
@@ -968,6 +1095,7 @@ export class Transit {
       if (!b.obj.visible) continue;
       const { at, dir } = this.busAt(b, t);
       b.obj.position.set(at.x, this.bridgeHeight(at) ?? 0.05, -at.y);
+      this.rec?.push({ kind: "bus", x: at.x, y: at.y, src: String(b.route) });
       b.obj.rotation.y = Math.atan2(dir.y, dir.x);
     }
 
@@ -993,6 +1121,7 @@ export class Transit {
     };
     const drawCat = (pos: V2, y: number, heading: number, k: number, sway: number, accent: THREE.Color, coat: Coat, fit: Outfit, pose: Pose) => {
       if (np >= MAX_PEOPLE || pose.hidden) return;
+      this.rec?.push({ kind: "cat", x: pos.x, y: pos.y, src: "" });
       if (fit.kid) k *= 0.62;
       e.set(0, heading, sway, "YXZ"); q.setFromEuler(e);
       // feet on the ground: the planted leg's lowest point sits exactly at y
@@ -1050,6 +1179,7 @@ export class Transit {
     const walkPose = (ph: number, amp = 0.55): Pose => ({ swing: Math.sin(ph) * amp });
     const drawCar = (pos: V2, dir: V2, k: number, color: THREE.Color, fur: THREE.Color) => {
       if (nc >= MAX_CARS) return;
+      this.rec?.push({ kind: "car", x: pos.x, y: pos.y, src: carSrc });
       e.set(0, Math.atan2(dir.y, dir.x), 0); q.setFromEuler(e);
       m.compose(p.set(pos.x, (this.bridgeHeight(pos) ?? 0.02) + 0.005, -pos.y), q, sc.set(k, k, k));
       this.cars.setMatrixAt(nc, m); this.cars.setColorAt(nc, color);
@@ -1057,6 +1187,7 @@ export class Transit {
       this.drivers.setMatrixAt(nc, m); this.drivers.setColorAt(nc, fur);
       nc++;
     };
+    let carSrc = "traffic";
     // street traffic from Lean's numbers: cars looping on busy segments
     for (const c of this.traffic) {
       const L = dist(c.a, c.b);
@@ -1069,6 +1200,7 @@ export class Transit {
       const k = Math.min(1, s2 / 0.3, (L - s2) / 0.3);
       drawCar(pos, dir, Math.max(0.001, k), c.color, c.fur);
     }
+    carSrc = "ambient";
     for (const c of this.ambientCars) {
       const v = 0.8;
       let s2: number, back = false;
@@ -1079,6 +1211,7 @@ export class Transit {
       const k = Math.min(1, s2 / 0.4, (c.L - s2) / 0.4);
       drawCar(add(at.at, mul(v2(-dir.y, dir.x), -0.1)), dir, Math.max(0.001, k), c.color, c.fur);
     }
+    carSrc = "day";
     // Lean's simulated day
     if (this.day.length) this.drawDay(t, person, drawCar, walkPose);
     for (const w of this.walkers) {
@@ -1447,9 +1580,21 @@ function softDot(): THREE.CanvasTexture {
 const segKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
 const mid2 = (a: V2, b: V2): V2 => v2((a.x + b.x) / 2, (a.y + b.y) / 2);
 /** Bridge geometry shared with river.ts: the deck spans the river, perpendicular to segment a→b. */
-export const BRIDGE_SPAN = 2.7, BRIDGE_W = 0.95;
+/** The deck spans the water and its banks; it is about as wide as a street. */
+export const BRIDGE_SPAN = 2.4, BRIDGE_W = 0.7;
 export const bridgeY = (t: number) => 0.17 + Math.sin(Math.max(0, Math.min(1, t)) * Math.PI) * 0.3;
+/**
+ * Where the bridge of each river segment stands (set by the world when a town loads): at one end of
+ * the segment, where streets meet the water on both banks, so the deck joins road to road.
+ * Stored for the segment a→b; asked for b→a, the directions flip.
+ */
+export const CROSSINGS = new Map<string, { mid: V2; d: V2; n: V2 }>();
+export const crossKey = (a: V2, b: V2) => `${a.x.toFixed(3)},${a.y.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)}`;
 export function crossing(a: V2, b: V2) {
+  const c = CROSSINGS.get(crossKey(a, b));
+  if (c) return c;
+  const r = CROSSINGS.get(crossKey(b, a));
+  if (r) return { mid: r.mid, d: mul(r.d, -1), n: mul(r.n, -1) };
   const d = norm(sub(b, a)), n = v2(-d.y, d.x);
   return { mid: mid2(a, b), d, n };
 }
@@ -1459,7 +1604,11 @@ export const BANK_LANE = 1.0;
 /** The way over, replacing the river leg a→b: along the near bank lane, over the deck, along the far bank lane. */
 function detour(a: V2, b: V2): V2[] {
   const { mid, n } = crossing(a, b);
-  const e0 = add(mid, mul(n, -BANK_LANE)), e1 = add(mid, mul(n, BANK_LANE));
+  // the quays run beside the river (straight out from the segment); the deck may be at an angle
+  const dd = norm(sub(b, a));
+  let q = v2(-dd.y, dd.x);
+  if (q.x * n.x + q.y * n.y < 0) q = mul(q, -1);
+  const e0 = add(mid, mul(n, -(BRIDGE_SPAN / 2 + 0.2))), e1 = add(mid, mul(n, BRIDGE_SPAN / 2 + 0.2));
   const steps = [0.2, 0.35, 0.5, 0.65, 0.8].map((u) => add(e0, mul(sub(e1, e0), u)));
-  return [add(a, mul(n, -BANK_LANE)), e0, ...steps, e1, add(b, mul(n, BANK_LANE))];
+  return [add(a, mul(q, -BANK_LANE)), add(mid, mul(q, -BANK_LANE)), e0, ...steps, e1, add(mid, mul(q, BANK_LANE)), add(b, mul(q, BANK_LANE))];
 }

@@ -4,12 +4,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MapCamera } from "./camera";
-import { GB, col, w3 } from "./builder";
+import { GB, SHAPES, col, trs, w3 } from "./builder";
 import { TILE_TOP, buildingHeight, fixedMarker, makeBuilding, tree, type LifeSpots, type Piece } from "./buildings";
-import { MAP_SCALE, segDist, add, ccw, centroid, dist, inset, insetEdges, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
+import { MAP_SCALE, polyHitsStrips, segDist, add, ccw, centroid, dist, inset, insetEdges, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
 import { C } from "./palette";
 import { Rng, hashStr } from "./rng";
-import { Transit } from "./transit";
+import { BRIDGE_SPAN, BRIDGE_W, CROSSINGS, Transit, crossKey, crossing } from "./transit";
 import { RIVER_HALF, bridgeMesh, buildRiver, type BridgeView } from "./river";
 import type { Building, PuzzleReply } from "./types";
 import { Metro } from "./metro";
@@ -212,15 +212,19 @@ export class World {
     const riverSegs = pz.map.segments.map((s, i) => (s.terrain === "stream" ? i : -1)).filter((i) => i >= 0);
     this.riverSegs = new Set(riverSegs);
     this.segPts = pz.map.segments.map((s) => [pts[s.a], pts[s.b]] as [V2, V2]);
+    this.roadSegs = pz.map.segments.map((s, i) => (s.terrain !== "stream" ? i : -1)).filter((i) => i >= 0);
     this.roads(pts, pz.map.segments.filter((s) => s.terrain !== "stream"));
+    this.placeCrossings(pts, pz.map.segments, pz.bridgeSites ?? []);
     this.riverLines = riverSegs.length ? buildRiver(this.level as unknown as THREE.Scene, pts, pz.map.segments, riverSegs, new Set(outerLoop(pz.map.blocks.map((b) => b.corners))), c, this.seed) : [];
+    this.drawLandings();
     this.bridges = (pz.bridgeSites ?? []).map((seg, site) => {
       const s = pz.map.segments[seg];
       const a = pts[s.a], b = pts[s.b];
       const ghost = bridgeMesh(a, b, true), real = bridgeMesh(a, b, false);
       real.visible = false;
       const hit = new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
-      hit.position.set((a.x + b.x) / 2, 0.15, -(a.y + b.y) / 2);
+      const cm = crossing(a, b).mid;
+      hit.position.set(cm.x, 0.15, -cm.y);
       hit.scale.set(1, 1, 1);
       hit.userData.bridge = site;
       this.level.add(ghost, real, hit);
@@ -228,7 +232,7 @@ export class World {
     });
     this.metro = new Metro(this.level, c, this.radius, mdir, outer, this.seed);
     this.air = new Air(this.level);
-    this.surroundings(c, outer, (p) => wet(p) || !!this.metro?.near(p, 1.4) || this.downtownArea(p, c));
+    this.surroundings(c, outer, (p) => wet(p) || this.riverLines.some(([a, b]) => segDist(p, a, b) < 1.5) || (this.metro?.corridor() ?? []).some((st) => segDist(p, st.a, st.b) < st.hw + 0.7) || this.downtownArea(p, c));
 
     const edgeKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
     const owners = new Map<string, number[]>();
@@ -263,7 +267,10 @@ export class World {
       const corners = P.map((v, k) => { const a = P[(k - 1 + P.length) % P.length], d = P[(k + 1) % P.length]; const u = norm(sub(a, v)), w = norm(sub(d, v)); return { v, k, c: u.x * w.x + u.y * w.y }; }).sort((x, y) => y.c - x.c);
       for (const q of corners.slice(0, 2)) lampSpots.push(add(q.v, mul(norm(sub(b.center, q.v)), 0.14)));
     }
-    this.lamps = new Lamps(this.level, lampSpots);
+    // no lamp posts where a bridge lands
+    const decksAt = [...CROSSINGS.values()].map((x) => x.mid);
+    this.lamps = new Lamps(this.level, lampSpots.filter((p) => decksAt.every((q) => dist(p, q) > 1.8)));
+    this.lamps.group.userData.tag = "lamp";
     this.birds = new Birds(this.level, c, this.radius, this.seed);
     // a soft line around the playable district, on the inner edge of the ring road
     const bm = new GB();
@@ -370,6 +377,15 @@ export class World {
     return [...out];
   }
   private riverSegs = new Set<number>();
+  /** Map segments drawn as streets (for the scene checks). */
+  roadSegs: number[] = [];
+  /** Is a plan point on the river's water (not on a built bridge deck)? */
+  onWater(p: V2): boolean {
+    if (!this.riverLines.some(([a, b]) => segDist(p, a, b) < 0.72)) return false;
+    return (this.transit?.bridgeHeight(p) ?? null) === null;
+  }
+  get stationSpots(): number[] { return [...this.spots.keys()]; }
+  get center(): V2 { return this.mapCenter; }
 
   private spots = new Map<number, V2>();
   private bridges: BridgeView[] = [];
@@ -623,7 +639,7 @@ export class World {
       for (let s = 0; s < 60; s++) {
         ang += Math.sin(s * 0.35 + a0) * 0.06;
         p = add(p, v2(Math.cos(ang) * 1.0, Math.sin(ang) * 1.0));
-        if (wet(p)) break;
+        if (wet(p) || this.riverLines.some(([a, b]) => segDist(p, a, b) < 1.6)) break;
         lane.push(p);
       }
       lanes.push(lane);
@@ -640,7 +656,9 @@ export class World {
     // the city around the neighborhood (not playable), thinning out into the countryside
     const riverNear = (p: V2, d: number) => this.riverLines.some(([a, b]) => segDist(p, a, b) < d);
     const laneNear = (p: V2, d: number) => lanes.some((l) => l.some((q) => dist(q, p) < d));
-    const ok = buildOutskirts(this.level, outer, c, this.seed, (p) => wet(p) || riverNear(p, 1.7) || laneNear(p, 0.9) || pointInPolygon(p, outer));
+    const strips = [...(this.metro?.corridor() ?? []), ...lanes.flatMap((l) => l.slice(1).map((q, k) => ({ a: l[k], b: q, hw: 0.28 + 0.25 }))),
+      ...this.riverLines.map(([a, b]) => ({ a, b, hw: 1.3 }))];
+    const ok = buildOutskirts(this.level, outer, c, this.seed, (p) => wet(p) || riverNear(p, 1.7) || laneNear(p, 0.9) || pointInPolygon(p, outer), strips);
     this.outskirts = ok;
     const cottages: { p: V2; h: number }[] = [];
     // a windmill and a little farm out in the meadow
@@ -650,7 +668,11 @@ export class World {
       const face = norm(sub(c, p)), side = v2(-face.y, face.x);
       const probe = [p, add(p, mul(side, -6)), add(p, mul(side, 6)), add(add(p, mul(side, -4)), mul(face, 3.5))];
       if (probe.some((q) => !clear(q, 1) || laneNear(q, 1.5) || riverNear(q, 2) || this.downtownArea(q, c))) continue;
+      // the whole farm (fields, pasture, windmill) stays clear of the metro and the downtown road
+      const farmBox = [add(add(p, mul(side, -7)), mul(face, -2.5)), add(add(p, mul(side, 7)), mul(face, -2.5)), add(add(p, mul(side, 7)), mul(face, 5.5)), add(add(p, mul(side, -7)), mul(face, 5.5))];
+      if (polyHitsStrips(ccw(farmBox), (this.metro?.corridor() ?? []).map((st) => ({ ...st, hw: st.hw + 0.5 })))) continue;
       this.farm = new Farm(this.level, p, face, rng);
+      this.farm.group.userData.tag = "farm";
       this.farmAt = p;
       break;
     }
@@ -693,7 +715,8 @@ export class World {
         if (!clear(p, 0.5)) continue;
         const n = mul(v2(-dn.y, dn.x), -side);
         house(pick(dist(p, c)), p, n, rng.range(0.9, 1.2), 0.85, rng.range(0.55, 0.75), rng.pick([C.butter, "#FFD6A5", "#FFF1CF", C.white]), rng.pick([C.coral, "#F47C6E", "#E0707E"]));
-        tree(pick(dist(p, c)), add(p, mul(dn, 0.9)), 1, rng, 0);
+        const tp = add(p, mul(dn, 0.9));
+        if (clear(tp)) tree(pick(dist(p, c)), tp, 1, rng, 0);
       }
     } else {
       // quieter residential streets: rows of little houses on soft rings, fading out
@@ -713,8 +736,9 @@ export class World {
     void cottages;
     this.smoke = new Smoke(this.level, smokeAt);
     for (const [m, shadow] of [[near, true], [far, false]] as const) {
-      const mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { wind: true, clouds: true, windows: true }));
+      const mesh: THREE.Mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { wind: true, clouds: true, windows: true }));
       mesh.castShadow = shadow; mesh.receiveShadow = true;
+      mesh.userData.tag = "country";
       this.level.add(mesh);
     }
   }
@@ -734,7 +758,7 @@ export class World {
         for (const p of v.pieces) { v.root.remove(p.obj); disposeTree(p.obj); }
         v.spots = { benches: [], strolls: [] };
         v.pieces = makeBuilding(b, { poly: v.tilePoly, center: v.center, rng: new Rng(this.seed ^ hashStr(`b${i}:${b.kind}`)), keepClear: this.spots.get(i), fixed: v.fixed, spots: v.spots, index: i, townSalt: this.seed % 7 });
-        for (const p of v.pieces) { p.obj.userData.block = i; v.root.add(p.obj); }
+        for (const p of v.pieces) { p.obj.userData.block = i; p.obj.userData.tag = "block"; v.root.add(p.obj); }
         v.shown = key;
         v.building = b;
         (v.top.material as THREE.MeshStandardMaterial).color.copy(col(b.kind === "empty" ? C.lot : v.fixed ? C.plotFixed : C.plot));
@@ -751,7 +775,9 @@ export class World {
       if (v.badge) v.badge.position.y = buildingHeight(b) + 0.5;
     });
     this.transit?.setStation(station);
-    this.metro?.setStation(station !== null ? this.spots.get(station) ?? this.blocks[station]?.center ?? null : null);
+    // under town the metro runs beneath the streets: the dotted line follows them from the portal to the station
+    const spot = station !== null ? this.spots.get(station) ?? this.blocks[station]?.center ?? null : null;
+    this.metro?.setStation(spot && this.metro && this.transit ? this.transit.streetRoute(this.metro.portal, spot) : null);
   }
 
   /** Hearts over happy homes, small gray clouds over unhappy ones (from Lean's residents). */
@@ -851,6 +877,193 @@ export class World {
     this.cam.set(new THREE.Vector3(v.center.x, 0, -v.center.y), this.radius * 1.5, this.cam.goal.az, this.cam.goal.polar);
   }
 
+  /**
+   * Scene facts for the automated checks (`?test`): what is actually drawn, measured from the
+   * meshes. Footprints are mesh vertices near the ground; overlaps are tested against the metro
+   * corridor, the river water, bridge decks and roads.
+   */
+  facts() {
+    const r2 = (p: V2) => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) });
+    const blocks = this.blocks.map((b, i) => {
+      // rendered building: kind/floors shown, and the tallest point of its building pieces
+      let top = 0, verts = 0;
+      const hulls: V2[][] = [];
+      for (const pc of b.pieces) {
+        pc.obj.updateMatrixWorld(true);
+        const pts: V2[] = [];
+        pc.obj.traverse((o) => {
+          if (!(o instanceof THREE.Mesh)) return;
+          const pos = o.geometry.getAttribute("position"), v = new THREE.Vector3();
+          verts += pos.count;
+          for (let k = 0; k < pos.count; k++) {
+            v.fromBufferAttribute(pos, k).applyMatrix4(o.matrixWorld);
+            if (!pc.obj.userData.yard) { top = Math.max(top, v.y); if (v.y > TILE_TOP + 0.08 && v.y < TILE_TOP + 0.3) pts.push(v2(v.x, -v.z)); }
+          }
+        });
+        if (!pc.obj.userData.yard && pts.length >= 3) hulls.push(hull2(pts));
+      }
+      return { i, kind: b.building?.kind ?? null, stories: b.building?.stories ?? 0, shown: b.shown, poly: b.tilePoly.map(r2), top: +top.toFixed(3), verts, hulls: hulls.map((h) => h.map(r2)) };
+    });
+    // footprints of everything built around and in town, as rounded unique points with their source
+    const tagOf = (o: THREE.Object3D): string | null => { for (let x: THREE.Object3D | null = o; x; x = x.parent) if (x.userData.tag) return x.userData.tag; return null; };
+    const pts = new Map<string, { x: number; y: number; h: number; tag: string }>();
+    const v = new THREE.Vector3(), m4 = new THREE.Matrix4();
+    this.level.updateMatrixWorld(true);
+    this.level.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const tag = tagOf(o);
+      if (!tag) return;
+      if (tag === "block" && (() => { for (let x: THREE.Object3D | null = o; x; x = x.parent) if (x.userData.yard) return true; return false; })()) return;
+      const pos = o.geometry.getAttribute("position");
+      const inst = o instanceof THREE.InstancedMesh ? o.count : 1;
+      for (let n = 0; n < inst; n++) {
+        if (o instanceof THREE.InstancedMesh) { o.getMatrixAt(n, m4); m4.premultiply(o.matrixWorld); } else m4.copy(o.matrixWorld);
+        for (let k = 0; k < pos.count; k++) {
+          v.fromBufferAttribute(pos, k).applyMatrix4(m4);
+          if (v.y < 0.08) continue;
+          const key = `${Math.round(v.x * 10)},${Math.round(v.z * 10)},${Math.round(v.y * 4)}`;
+          if (!pts.has(key)) pts.set(key, { x: v.x, y: -v.z, h: v.y, tag });
+        }
+      }
+    });
+    const solid = [...pts.values()];
+    const hits: Record<string, { tag: string; x: number; y: number; h: number }[]> = { metro: [], river: [], bridge: [], road: [] };
+    const add2 = (k: string, p: { tag: string; x: number; y: number; h: number }) => { if (hits[k].length < 400) hits[k].push({ ...p, x: +p.x.toFixed(2), y: +p.y.toFixed(2), h: +p.h.toFixed(2) }); };
+    const near = (p: V2, a: V2, b: V2, w: number) => {
+      const minx = Math.min(a.x, b.x) - w, maxx = Math.max(a.x, b.x) + w, miny = Math.min(a.y, b.y) - w, maxy = Math.max(a.y, b.y) + w;
+      return p.x >= minx && p.x <= maxx && p.y >= miny && p.y <= maxy && segDist(p, a, b) < w;
+    };
+    const corridor = this.metro ? [{ a: add(this.metro.portal, mul(this.metro.dir, -0.6)), b: this.metroLineEnd(), hw: 0.5 }] : [];
+    const decks = this.bridges.map((b) => crossing(b.a, b.b));
+    const onDeck = (p: V2) => decks.some((d) => Math.abs((p.x - d.mid.x) * d.n.x + (p.y - d.mid.y) * d.n.y) < BRIDGE_SPAN / 2 && Math.abs((p.x - d.mid.x) * d.d.x + (p.y - d.mid.y) * d.d.y) < BRIDGE_W / 2);
+    const landRoads = this.segPts.filter((_s, i) => !this.riverSegs.has(i));
+    const outerRoads = this.outskirts?.roads ?? [];
+    for (const p of solid) {
+      const q = v2(p.x, p.y);
+      if (p.h < 1.3 && corridor.some((c) => near(q, c.a, c.b, c.hw))) add2("metro", p);
+      if (p.tag === "downtown") continue;
+      if (p.h > 0.12 && this.riverLines.some(([a, b]) => near(q, a, b, 0.75)) && !onDeck(q)) add2("river", p);
+      if (p.h > 0.1 && p.h < 1.2 && onDeck(q)) add2("bridge", p);
+      // footprints (near the ground) on a road
+      // footprints: walls and trunks just above the tile top (tile curbs themselves are not buildings)
+      // (only what stands on the ground: wall bases and trunks; tree canopies may overhang a street)
+      const foot = p.tag === "country" || p.tag === "farm" ? p.h > 0.04 && p.h < 0.18 : p.h > TILE_TOP + 0.01 && p.h < TILE_TOP + 0.12;
+      if (foot && p.tag !== "lamp") {
+        if (landRoads.some(([a, b]) => near(q, a, b, ROAD_W / 2 - 0.02))) add2("road", { ...p, tag: p.tag + ">town-street" });
+        else if (outerRoads.some(([a, b]) => near(q, a, b, 0.25))) add2("road", { ...p, tag: p.tag + ">outer-street" });
+      }
+    }
+    return {
+      blocks,
+      river: { segments: [...this.riverSegs], lines: this.riverLines.length, polyline: this.riverLines.map(([a, b]) => [r2(a), r2(b)]) },
+      bridges: this.bridges.map((b, k) => {
+        // measure the real mesh: its long axis must run across the river segment
+        const d = norm(sub(b.b, b.a));
+        let along = 0, across = 0;
+        b.real.updateMatrixWorld(true);
+        b.real.traverse((o) => {
+          if (!(o instanceof THREE.Mesh)) return;
+          const pos = o.geometry.getAttribute("position");
+          for (let i = 0; i < pos.count; i++) {
+            v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+            if (v.y < 0.12) continue; // the deck and its rails, not the quays and ramps
+            const c = sub(v2(v.x, -v.z), crossing(b.a, b.b).mid);
+            along = Math.max(along, Math.abs(c.x * d.x + c.y * d.y)); across = Math.max(across, Math.abs(-c.x * d.y + c.y * d.x));
+          }
+        });
+        const cr = crossing(b.a, b.b);
+        const ends = [-1, 1].map((sg) => add(cr.mid, mul(cr.n, sg * (BRIDGE_SPAN / 2 + 0.35))));
+        return { site: b.site, seg: b.seg, ghost: b.ghost.visible, built: b.real.visible, along: +along.toFixed(2), across: +across.toFixed(2), on: !!this.bridgeOn[k], mid: cr.mid, n: cr.n, ends };
+      }),
+      outerPolys: (this.outskirts?.polys ?? []).map((p) => p.map(r2)),
+      metro: this.metro ? { portal: r2(this.metro.portal), dir: r2(this.metro.dir), end: r2(this.metroLineEnd()), branch: this.metro.branchPts().map(r2) } : null,
+      hits,
+      outskirtsVerts: (() => { let n = 0; this.outskirts?.group.traverse((o) => { if (o instanceof THREE.Mesh) n += o.geometry.getAttribute("position").count; }); return n; })(),
+    };
+  }
+  private metroLineEnd(): V2 { return (this.metro as unknown as { line: V2[] }).line[0]; }
+
+  /**
+   * Put each bridge site's bridge where roads meet the river on both banks: at one end of its
+   * segment (a river node), each node used by one bridge only. The deck lines up with the streets
+   * it joins. Looks only: which blocks a bridge joins is the puzzle's (the segment's two blocks).
+   */
+  private placeCrossings(pts: V2[], segs: { a: number; b: number; terrain: string }[], sites: number[]) {
+    CROSSINGS.clear();
+    this.landings = [];
+    const land = (node: number) => segs.filter((sg) => sg.terrain !== "stream" && (sg.a === node || sg.b === node)).map((sg) => norm(sub(pts[sg.a === node ? sg.b : sg.a], pts[node])));
+    const riverAt = (node: number) => segs.filter((sg) => sg.terrain === "stream" && (sg.a === node || sg.b === node)).map((sg) => norm(sub(pts[sg.a === node ? sg.b : sg.a], pts[node])));
+    // the river's direction through a node, and the streets on each bank
+    const nodeInfo = (node: number, segDir: V2) => {
+      const rv = riverAt(node);
+      let along = segDir;
+      if (rv.length === 2) along = norm(sub(rv[0], rv[1]));
+      const across = v2(-along.y, along.x);
+      const L = land(node);
+      const left = L.filter((u) => u.x * across.x + u.y * across.y > 0.15), right = L.filter((u) => u.x * across.x + u.y * across.y < -0.15);
+      const score = (left.length ? 1 : 0) + (right.length ? 1 : 0) + (rv.length === 2 ? 0.5 : 0);
+      // the deck runs from the street on one bank to the street on the other
+      let n = across;
+      if (left.length && right.length) {
+        const pick = (us: V2[], ref: V2) => us.reduce((b, u) => (u.x * ref.x + u.y * ref.y > b.x * ref.x + b.y * ref.y ? u : b));
+        const u1 = pick(left, across), u2 = pick(right, mul(across, -1));
+        n = norm(sub(u1, u2));
+      }
+      return { score, n };
+    };
+    const opts = sites.map((seg) => {
+      const sg = segs[seg], a = pts[sg.a], b = pts[sg.b], dAB = norm(sub(b, a));
+      return [sg.a, sg.b].map((node) => ({ node, ...nodeInfo(node, dAB) }));
+    });
+    // the best assignment with each river node used once (few sites: try them all)
+    let best: number[] | null = null, bestScore = -1;
+    const k = sites.length;
+    if (k <= 12) for (let mask = 0; mask < 1 << k; mask++) {
+      const used = new Set<number>();
+      let ok = true, sc = 0;
+      for (let i = 0; i < k; i++) {
+        const o = opts[i][(mask >> i) & 1];
+        // each river node holds one bridge, and decks keep apart
+        if (used.has(o.node) || [...used].some((u) => dist(pts[u], pts[o.node]) < 2.8)) { ok = false; break; }
+        used.add(o.node); sc += o.score;
+      }
+      if (ok && sc > bestScore) { bestScore = sc; best = Array.from({ length: k }, (_, i) => (mask >> i) & 1); }
+    }
+    sites.forEach((seg, i) => {
+      const sg = segs[seg], a = pts[sg.a], b = pts[sg.b];
+      if (!best) return; // falls back to the middle of the segment
+      const o = opts[i][best[i]];
+      let n = o.n;
+      // keep the stored frame consistent with a→b: n is to the left of d
+      const dAB = norm(sub(b, a));
+      if (dAB.x * n.y - dAB.y * n.x < 0) n = mul(n, -1);
+      const d = v2(n.y, -n.x);
+      CROSSINGS.set(crossKey(a, b), { mid: pts[o.node], d, n });
+    });
+    // where a street meets the water: a clean landing at the bank (every river node, every street)
+    const riverNodes = new Set(segs.filter((sg) => sg.terrain === "stream").flatMap((sg) => [sg.a, sg.b]));
+    for (const node of riverNodes) for (const u of land(node)) this.landings.push({ p: pts[node], u });
+  }
+  /** A street that meets the river ends cleanly at the bank: paving over the sand, a white curb, two bollards. */
+  private drawLandings() {
+    if (!this.landings.length) return;
+    const m = new GB();
+    const road = col(C.road), curb = col(C.white), post = col("#6B7A99");
+    for (const { p, u } of this.landings) {
+      const w = v2(-u.y, u.x);
+      const at = (t: number, s: number) => add(add(p, mul(u, t)), mul(w, s));
+      const hw = ROAD_W / 2;
+      m.quad(w3(at(0.86, -hw), 0.029), w3(at(1.25, -hw), 0.029), w3(at(1.25, hw), 0.029), w3(at(0.86, hw), 0.029), road, [0, 1, 0]);
+      m.quad(w3(at(0.84, -hw), 0.034), w3(at(0.9, -hw), 0.034), w3(at(0.9, hw), 0.034), w3(at(0.84, hw), 0.034), curb, [0, 1, 0]);
+      for (const sd of [-0.2, 0.2]) { const q = at(0.95, sd); m.geom(SHAPES.cyl, trs(q.x, 0.08, -q.y, 0.028, 0.1, 0.028), post); }
+    }
+    const mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { clouds: true }));
+    mesh.receiveShadow = true;
+    this.level.add(mesh);
+  }
+  /** Street ends at the river: where a landing (curb and bollards) is drawn. */
+  private landings: { p: V2; u: V2 }[] = [];
+
   /** Where downtown is, from the town's center (the metro comes from there). */
   get downtown(): V2 { return this.metroDir; }
 
@@ -930,7 +1143,8 @@ export class World {
   setBridgeTool(on: boolean) { this.bridgeTool = on; this.refreshBridgeGhosts(); }
   private refreshBridgeGhosts() {
     this.bridges.forEach((b, k) => {
-      const op = k === this.hoverBridge ? 0.7 : this.bridgeTool ? 0.5 : 0.16;
+      // many sites: faint unless the Bridge tool is picked or the site is hovered
+      const op = k === this.hoverBridge ? 0.75 : this.bridgeTool ? 0.5 : 0.09;
       b.ghost.traverse((o) => { if (o instanceof THREE.Mesh) (o.material as THREE.MeshBasicMaterial).opacity = op; });
     });
   }
@@ -963,7 +1177,7 @@ export class World {
   }
 
   bridgeWalk(site: number) { const b = this.bridges[site]; if (b) this.transit?.bridgeWalk(b.seg); }
-  bridgeMid(site: number): V2 | null { const b = this.bridges[site]; return b ? v2((b.a.x + b.b.x) / 2, (b.a.y + b.b.y) / 2) : null; }
+  bridgeMid(site: number): V2 | null { const b = this.bridges[site]; return b ? crossing(b.a, b.b).mid : null; }
 
   /** The two blocks a bridge would join. */
   bridgeBlocks(site: number): number[] { return this.segOwners.get(this.bridges[site]?.seg ?? -1) ?? []; }
@@ -1015,7 +1229,8 @@ export class World {
     } else if (t.kind === "bridge") {
       const b = this.bridges[t.i];
       if (!b) return null;
-      p = new THREE.Vector3((b.a.x + b.b.x) / 2, 0.6, -(b.a.y + b.b.y) / 2);
+      const cm = crossing(b.a, b.b).mid;
+      p = new THREE.Vector3(cm.x, 0.6, -cm.y);
     } else if (t.kind === "site") {
       const s = this.spots.get(t.i);
       if (!s) return null;
@@ -1026,6 +1241,8 @@ export class World {
     return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
   }
 
+  /** No growing or shaking animation is running. */
+  get settled(): boolean { return !this.anims.some((a) => a.obj.userData.tag === "block"); }
   private anim(obj: THREE.Object3D, start: number, dur: number, step: Anim["step"], done?: () => void) {
     this.anims = this.anims.filter((a) => !(a.obj === obj && a.step.length === step.length && !a.done && !done));
     this.anims.push({ obj, start, dur, step, done });
@@ -1190,4 +1407,13 @@ function skyTexture(): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+/** Convex hull of plan points (monotone chain). */
+function hull2(p: V2[]): V2[] {
+  const s = [...p].sort((a, b) => a.x - b.x || a.y - b.y);
+  const cr = (o: V2, a: V2, b: V2) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (pts: V2[]) => { const h: V2[] = []; for (const q of pts) { while (h.length >= 2 && cr(h[h.length - 2], h[h.length - 1], q) <= 0) h.pop(); h.push(q); } return h; };
+  const lo = half(s), up = half([...s].reverse());
+  return [...lo.slice(0, -1), ...up.slice(0, -1)];
 }
