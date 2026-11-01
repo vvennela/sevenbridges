@@ -32,7 +32,15 @@ def main (args : List String) : IO Unit := do
         r := r'
         let root := ((rootJobs p).map fun j => j.P.bound j.opts).foldl max 0
         let rootK := ((rootJobs p).map fun j => j.P.knapsackBound j.opts).foldl max 0
+        let tg ← IO.monoMsNow
         let g := firstGuess (prepare p)
+        say s!"  first guess {score p g} in {(← IO.monoMsNow) - tg} ms"
+        let tr ← IO.monoMsNow
+        let rr := Generator.randomRatings p 1000 3
+        say s!"  random ratings {rr.size} in {(← IO.monoMsNow) - tr} ms"
+        let tj ← IO.monoMsNow
+        let js := jobs p
+        say s!"  jobs {js.length} in {(← IO.monoMsNow) - tj} ms"
         if args.contains "caps" then
           for j in (rootJobs p).take 1 do
             say s!"  budget {p.budget} allowed {p.allowed.map fun b => s!"{b.kindName}{b.stories}"}"

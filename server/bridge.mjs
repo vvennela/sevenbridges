@@ -55,21 +55,43 @@ wss.on("connection", (ws) => {
     let line = msg.toString().replace(/\r?\n/g, " ");
     // "newPuzzle": make a map (untrusted geometry; Lean checks it), then ask
     // Lean to generate a puzzle on it.
+    let gen = null; // for "newPuzzle": the size, first seed and tries so far
+    const generateLine = (seed, blocks) => {
+      const m = generateMap(seed, blocks);
+      return JSON.stringify({ cmd: "generate", seed, routes: m.routes,
+        map: { points: m.points, segments: m.segments, blocks: m.blocks } });
+    };
     try {
       const req = JSON.parse(line);
       if (req.cmd === "newPuzzle") {
         const seed = Number(req.seed) >>> 0;
-        // Puzzle sizes: easy 5 blocks, medium 7, hard 9 (DESIGN.md §8.5).
-        const sizes = { easy: 5, medium: 7, hard: 9 };
-        const blocks = sizes[req.size] ?? [5, 7, 9][seed % 3];
-        const m = generateMap(seed, blocks);
-        line = JSON.stringify({ cmd: "generate", seed, routes: m.routes,
-          map: { points: m.points, segments: m.segments, blocks: m.blocks } });
+        // Puzzle sizes: easy 5 blocks, medium 7, hard 8 (DESIGN.md §8.5).
+        const sizes = { easy: 5, medium: 7, hard: 8 };
+        const blocks = sizes[req.size] ?? [5, 7, 8][seed % 3];
+        gen = { seed, blocks, tries: 1 };
+        line = generateLine(seed, blocks);
       }
     } catch { /* not JSON: let Lean report the error */ }
-    const reply = (r) => { if (ws.readyState === ws.OPEN) ws.send(r); };
+    const send = (r) => { if (ws.readyState === ws.OPEN) ws.send(r); };
+    // If Lean found no level it could prove in time on this map, try a new map
+    // (at most 3 maps in all). The seed in the reply says which map was used.
+    const reply = (r) => {
+      if (gen && gen.tries < 3 && alive && child?.stdin?.writable) {
+        try {
+          const j = JSON.parse(r);
+          if (j.ok && j.data && j.data.generated === false) {
+            gen.tries += 1;
+            const seed = (gen.seed + 7919 * (gen.tries - 1)) >>> 0;
+            waiting.push(reply);
+            child.stdin.write(generateLine(seed, gen.blocks) + "\n");
+            return;
+          }
+        } catch { /* pass the reply on */ }
+      }
+      send(r);
+    };
     if (!alive || !child?.stdin?.writable) {
-      reply(JSON.stringify({ ok: false, error: "engine restarting, try again" }));
+      send(JSON.stringify({ ok: false, error: "engine restarting, try again" }));
       scheduleRestart(200);
       return;
     }

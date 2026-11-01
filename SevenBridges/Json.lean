@@ -43,8 +43,10 @@ instance : ToJson Place where
 
 /-- A trip of a cat: `{"from": 3, "to": "downtown", "mode": "metro", "phase": "commute"}`. -/
 instance : ToJson Leg where
-  toJson l := Json.mkObj [("from", toJson l.start), ("to", toJson l.stop), ("mode", toJson l.mode),
-    ("phase", toJson l.phase)]
+  toJson l := Json.mkObj ([("from", toJson l.start), ("to", toJson l.stop), ("mode", toJson l.mode),
+    ("phase", toJson l.phase)] ++ match l.route with
+      | some r => [("route", toJson r)]
+      | none => [])
 deriving instance ToJson for CatReport
 
 def Building.kindName : Building → String
@@ -99,6 +101,8 @@ deriving instance ToJson for StopReport
 deriving instance ToJson for BusReport
 deriving instance ToJson for ResidentReport
 deriving instance ToJson for GroupChange
+deriving instance ToJson for NeighborChange
+deriving instance ToJson for StreetReport
 deriving instance ToJson for BlockReport
 deriving instance ToJson for Report
 

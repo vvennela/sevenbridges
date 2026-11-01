@@ -477,7 +477,8 @@ offices and downtown jobs at home, count `workerPrice` points for each
 resident of a working cat, at home, and at the offices only the downtown
 workers. -/
 def valueCapW (c : Context) (t : Tables) (info : BlockInfo) (b : Building) : Int :=
-  valueCap c t info b
+  bestMood c t info b + jobsCapW info b + salesCap info b
+    + (workerPrice * residentsPerCat * readTable t.working (workingCats c) info.block b : Nat)
 
 /-- Caps and costs for each option of each block: the first list with
 `valueCap`, the second with `valueCapW`. -/
@@ -552,6 +553,12 @@ def knapsack (vals : List (List (Int × Nat))) (units : Nat) : Int :=
 def Plan.knapsackFrom (P : Plan) (vals : Caps) : Int :=
   min (knapsack vals.1 ((P.c.puzzle.budget - P.L.leastCost) / 30))
     (knapsack vals.2 ((P.c.puzzle.budget - P.L.leastCost) / 30))
+
+/-- The knapsack cut: some knapsack bound is at most `best` (the second is only
+worked out if the first doesn't cut). -/
+def Plan.knapsackCut (P : Plan) (vals : Caps) (best : Int) : Bool :=
+  decide (knapsack vals.1 ((P.c.puzzle.budget - P.L.leastCost) / 30) ≤ best)
+    || decide (knapsack vals.2 ((P.c.puzzle.budget - P.L.leastCost) / 30) ≤ best)
 
 /-- **Upper bound** on the score of every valid layout whose transit is one of
 `P.group` and where block `j` holds one of `opts j`: the most the caps can add

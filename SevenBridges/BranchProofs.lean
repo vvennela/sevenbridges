@@ -118,7 +118,6 @@ theorem tryNode_spec (p : Puzzle) (keep : Solution → Bool) (P : Plan) (hP : P.
     st.Later p (st.tryNode P opts vals go) ∧ (st.tryNode P opts vals go).Covered p keep (FitsNode P opts) := by
   have hpz := puzzle_of_ok hP
   have hub : P.boundFrom vals = P.bound opts := by rw [hvals]; rfl
-  have hkn : P.knapsackFrom vals = P.knapsackBound opts := by rw [hvals]; rfl
   unfold Search.tryNode
   split
   · exact ⟨Search.Later.refl _, Search.covered_of_fuel_zero (by assumption)⟩
@@ -142,8 +141,8 @@ theorem tryNode_spec (p : Puzzle) (keep : Solution → Bool) (P : Plan) (hP : P.
       · split
         · rename_i hle
           refine ⟨h1, fun _ t hv _ hfit => ?_⟩
-          rw [hkn] at hle
-          exact Int.le_trans (score_le_knapsackBound p P hP.1 hP.2 opts t hv hfit) hle
+          rw [hvals] at hle
+          exact score_le_of_knapsackCut p P hP.1 hP.2 opts t hv hfit _ hle
         · exact ⟨Search.Later.trans h1 (hgo _).1, (hgo _).2⟩
 
 /-! ## Leaves: trying each transit choice -/

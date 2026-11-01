@@ -64,14 +64,16 @@ def Context.personalityOf (c : Context) (r : Resident) : Personality :=
 /-- Happiness on block `i`: for each cat living there, 5 residents times its
 happiness per person. -/
 def blockHappiness (c : Context) (T : Transit) (d : List CatDay) (look : Nat → Building) (i : Nat) : Int :=
+  let had := factorsHad c T d look i
   (residentsOn c i (look i)).foldl (fun t r =>
-    t + (residentsPerCat : Int) * happinessPerPerson (c.personalityOf r) (factorsHad c T d look i)) 0
+    t + (residentsPerCat : Int) * happinessPerPerson (c.personalityOf r) had) 0
 
 /-- Crime on block `i`: for each cat below the unhappy line, `unhappyCost`
 times how far below the line it is, times 5 residents. -/
 def blockCrime (c : Context) (T : Transit) (d : List CatDay) (look : Nat → Building) (i : Nat) : Nat :=
+  let had := factorsHad c T d look i
   (residentsOn c i (look i)).foldl (fun t r =>
-    t + unhappyCost * (unhappyLine - happinessPerPerson (c.personalityOf r) (factorsHad c T d look i)).toNat
+    t + unhappyCost * (unhappyLine - happinessPerPerson (c.personalityOf r) had).toNat
           * residentsPerCat) 0
 
 /-! ## Jobs and sales -/

@@ -772,6 +772,174 @@ theorem downtownOutput_le (c : Context) (T : Transit) (look : Nat → Building) 
   simp only [W]
   rw [Nat.mul_assoc, Nat.mul_assoc, Nat.mul_comm (workingCats c k (look k))]
 
+/-! ## Each working cat works once -/
+
+theorem sum_map_add_int {α : Type} (f g : α → Int) :
+    ∀ l : List α, (l.map fun x => f x + g x).sum = (l.map f).sum + (l.map g).sum
+  | [] => by simp
+  | x :: xs => by simp only [List.map_cons, List.sum_cons, sum_map_add_int f g xs]; omega
+
+theorem sum_map_natCast {α : Type} (f : α → Nat) :
+    ∀ l : List α, ((l.map f).sum : Int) = (l.map fun x => (f x : Int)).sum
+  | [] => by simp
+  | x :: xs => by simp only [List.map_cons, List.sum_cons, Int.natCast_add, sum_map_natCast f xs]
+
+theorem sum_indicator_le_one (f : Nat → Bool) :
+    ∀ (K : List Nat), K.Nodup → (∀ i j, f i = true → f j = true → i = j) →
+      (K.map fun k => if f k then 1 else 0).sum ≤ 1
+  | [], _, _ => by simp
+  | y :: ys, hn, h => by
+    rw [List.nodup_cons] at hn
+    simp only [List.map_cons, List.sum_cons]
+    by_cases hy : f y = true
+    · have : (ys.map fun k => if f k then 1 else 0).sum = 0 := by
+        apply sum_map_eq_zero
+        intro k hk
+        have : f k ≠ true := fun hk' => hn.1 (h y k hy hk' ▸ hk)
+        simp [this]
+      simp [hy, this]
+    · have := sum_indicator_le_one f ys hn.2 h
+      simp [hy]; omega
+
+/-- Cats that pick one block each are counted once over all blocks. -/
+theorem sum_filter_blocks_le {α : Type} (q : α → Bool) (g : α → Nat) (K : List Nat) (hK : K.Nodup) :
+    ∀ d : List α, (K.map fun k => (d.filter fun x => q x && g x == k).length).sum ≤ (d.filter q).length
+  | [] => by simp [sum_map_eq_zero]
+  | x :: xs => by
+    have ih := sum_filter_blocks_le q g K hK xs
+    have hsplit : (K.map fun k => ((x :: xs).filter fun y => q y && g y == k).length)
+        = (K.map fun k => (if q x && g x == k then 1 else 0) + (xs.filter fun y => q y && g y == k).length) := by
+      apply List.map_congr_left
+      intro k _
+      by_cases h : (q x && g x == k) = true <;> simp [List.filter_cons, h] <;> omega
+    rw [hsplit]
+    have h2 : ∀ (l : List Nat), (l.map fun k => (if q x && g x == k then 1 else 0)
+        + (xs.filter fun y => q y && g y == k).length).sum
+        = (l.map fun k => if q x && g x == k then 1 else 0).sum
+          + (l.map fun k => (xs.filter fun y => q y && g y == k).length).sum := by
+      intro l; induction l with
+      | nil => simp
+      | cons a as ih => simp only [List.map_cons, List.sum_cons, ih]; omega
+    rw [h2]
+    have h3 := sum_indicator_le_one (fun k => q x && g x == k) K hK (by
+      intro i j hi hj; simp only [Bool.and_eq_true, beq_iff_eq] at hi hj; omega)
+    by_cases hq : q x = true
+    · simp only [List.filter_cons, hq, ite_true, List.length_cons, Bool.true_and] at h3 ⊢; omega
+    · have : (K.map fun k => if q x && g x == k then 1 else 0).sum = 0 :=
+        sum_map_eq_zero _ _ (fun k _ => by simp [hq])
+      have hf : List.filter q (x :: xs) = List.filter q xs := by simp [List.filter_cons, hq]
+      rw [hf, this]; omega
+
+theorem length_filter_disjoint {α : Type} (a b w : α → Bool) :
+    ∀ d : List α, (∀ x ∈ d, a x = true → b x = true → False) →
+      (∀ x ∈ d, a x = true → w x = true) → (∀ x ∈ d, b x = true → w x = true) →
+      (d.filter a).length + (d.filter b).length ≤ (d.filter w).length
+  | [], _, _, _ => by simp
+  | x :: xs, hab, haw, hbw => by
+    have ih := length_filter_disjoint a b w xs (fun y hy => hab y (by simp [hy]))
+      (fun y hy => haw y (by simp [hy])) (fun y hy => hbw y (by simp [hy]))
+    by_cases ha : a x = true
+    · have hb : b x ≠ true := fun hb => hab x (by simp) ha hb
+      simp [List.filter_cons, ha, hb, haw x (by simp) ha]; omega
+    · by_cases hb : b x = true
+      · simp [List.filter_cons, ha, hb, hbw x (by simp) hb]; omega
+      · by_cases hw : w x = true <;> simp [List.filter_cons, ha, hb, hw] <;> omega
+
+theorem sum_map_add_nat {α : Type} (f g : α → Nat) :
+    ∀ l : List α, (l.map fun x => f x + g x).sum = (l.map f).sum + (l.map g).sum
+  | [] => by simp
+  | x :: xs => by simp only [List.map_cons, List.sum_cons, sum_map_add_nat f g xs]; omega
+
+/-- The block number of a place in town (0 for downtown or nowhere). -/
+def blockOf : Option Place → Nat
+  | some (.block j) => j
+  | _ => 0
+
+def isBlock : Option Place → Bool
+  | some (.block _) => true
+  | _ => false
+
+theorem work_eq_block (w : Option Place) (k : Nat) :
+    (w == some (.block k)) = (isBlock w && blockOf w == k) := by
+  rcases w with _ | (j | _) <;> simp [isBlock, blockOf]
+  apply Bool.eq_iff_iff.2
+  simp [beq_iff_eq]
+
+/-- A cat only works on a block if it works. -/
+theorem works_of_block (c : Context) (T : Transit) (look : Nat → Building) (cd : CatDay)
+    (hcd : cd ∈ simulate c T look) (h : isBlock cd.work = true) : cd.who.traits.day = .works := by
+  obtain ⟨seats, hday⟩ := simulate_mem c T look cd hcd
+  have hw : cd.work = (chooseWork c T seats cd.who).1 := by rw [hday]; rfl
+  rw [hw] at h
+  revert h
+  unfold chooseWork
+  simp only
+  split
+  · simp [isBlock]
+  · split <;> simp [isBlock]
+  · intro _; assumption
+  · intro _; assumption
+  · intro _; assumption
+
+/-- **Jobs filled by cats from town, at `workerPrice` each, plus downtown jobs,
+are at most `workerPrice` points per resident of every working cat.** -/
+theorem extra_le_working (c : Context) (T : Transit) (look : Nat → Building) :
+    (c.blocks.map fun k => workerPrice * min (look k).jobs (localWorkers (simulate c T look) k)
+        + downtownOutput (simulate c T look) k).sum
+      ≤ (c.blocks.map fun k => workerPrice * residentsPerCat * workingCats c k (look k)).sum := by
+  let d := simulate c T look
+  let A : CatDay → Bool := fun cd => isBlock cd.work
+  let B : CatDay → Bool := fun cd => cd.who.traits.day == .works && cd.work == some .downtown
+  let W : CatDay → Bool := fun cd => cd.who.traits.day == .works
+  have hloc : ∀ k, workerPrice * min (look k).jobs (localWorkers d k)
+      ≤ workerPrice * residentsPerCat * (d.filter fun cd => A cd && blockOf cd.work == k).length := by
+    intro k
+    unfold localWorkers
+    have : (d.filter fun cd => cd.work == some (.block k)) = (d.filter fun cd => A cd && blockOf cd.work == k) := by
+      apply List.filter_congr; intro cd _; exact work_eq_block _ _
+    rw [this, Nat.mul_assoc]
+    exact Nat.mul_le_mul_left _ (Nat.min_le_right _ _)
+  have hdown : ∀ k, downtownOutput d k
+      ≤ residentsPerCat * metroJobWorth * (d.filter fun cd => B cd && cd.who.home == k).length := by
+    intro k
+    unfold downtownOutput
+    rw [foldl_if_add, Nat.zero_add, ← sum_map_ite_const]
+    apply sum_le_sum_nat
+    intro cd _
+    by_cases h : (cd.who.home == k && cd.who.traits.day == .works && cd.work == some .downtown) = true
+    · have h' : (B cd && cd.who.home == k) = true := by
+        simp only [B, Bool.and_eq_true] at h ⊢; exact ⟨h.1.2, h.2⟩ |> fun x => ⟨x, h.1.1⟩
+      simp only [h, h', ite_true]
+      apply Nat.mul_le_mul_left
+      cases cd.mode <;> simp [downtownWorth, metroJobWorth, carJobWorth]
+    · simp only [h, Bool.false_eq_true, ite_false]; exact Nat.zero_le _
+  have hnd : c.blocks.Nodup := List.nodup_range
+  have hA := sum_filter_blocks_le A (fun cd => blockOf cd.work) c.blocks hnd d
+  have hB := sum_filter_blocks_le B (fun cd => cd.who.home) c.blocks hnd d
+  have hAB := length_filter_disjoint A B W d
+    (fun cd _ ha hb => by simp only [A, B, Bool.and_eq_true, beq_iff_eq] at ha hb; rw [hb.2] at ha; simp [isBlock] at ha)
+    (fun cd hcd ha => by
+      simp only [W, beq_iff_eq]
+      exact works_of_block c T look cd hcd ha)
+    (fun cd _ hb => by simp only [B, W, Bool.and_eq_true] at hb ⊢; exact hb.1)
+  have hW : (d.filter W).length = (c.blocks.map fun k => workingCats c k (look k)).sum := by
+    rw [length_filter_simulate c T look (fun r => r.traits.day == .works), length_filter_population]
+    rfl
+  have h1 : (c.blocks.map fun k => workerPrice * min (look k).jobs (localWorkers d k) + downtownOutput d k).sum
+      ≤ (c.blocks.map fun k => workerPrice * residentsPerCat * (d.filter fun cd => A cd && blockOf cd.work == k).length
+          + residentsPerCat * metroJobWorth * (d.filter fun cd => B cd && cd.who.home == k).length).sum :=
+    sum_le_sum_nat _ _ _ (fun k _ => Nat.add_le_add (hloc k) (hdown k))
+  have h2 : (c.blocks.map fun k => workerPrice * residentsPerCat * (d.filter fun cd => A cd && blockOf cd.work == k).length
+          + residentsPerCat * metroJobWorth * (d.filter fun cd => B cd && cd.who.home == k).length).sum
+      = workerPrice * residentsPerCat * (c.blocks.map fun k => (d.filter fun cd => A cd && blockOf cd.work == k).length).sum
+        + residentsPerCat * metroJobWorth * (c.blocks.map fun k => (d.filter fun cd => B cd && cd.who.home == k).length).sum := by
+    rw [sum_map_add_nat, mul_sum_map, mul_sum_map]
+  rw [h2] at h1
+  rw [← mul_sum_map, ← hW]
+  show (c.blocks.map fun k => workerPrice * min (look k).jobs (localWorkers d k) + downtownOutput d k).sum ≤ _
+  simp only [workerPrice, residentsPerCat, metroJobWorth] at h1 ⊢
+  omega
+
 /-! ## One block's value is at most its cap -/
 
 theorem getD_map_range {α : Type} (f : Nat → α) (n i : Nat) (d : α) (hi : i < n) :
@@ -1039,6 +1207,81 @@ theorem productivity_le (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.gr
   unfold blockProductivity jobsCap
   exact Nat.div_le_div_right (Nat.mul_le_mul (Nat.mul_le_mul_left _ hfill) (Nat.add_le_add_left hbonus _))
 
+theorem officeBonus_le (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
+    (spot : Nat → Spot) (opts : Nat → List Building) (look : Nat → Building)
+    (hspot : ∀ j, (spot j).Admits (look j)) (k : Nat) (hk : k < P.c.puzzle.blockCount) :
+    officeBonus P.c T look k ≤ bonusCap (P.blockInfo spot opts k) (look k) := by
+  have hoff : ((T.neighborsOf P.c k).filter fun j => (look j).isOffice).length
+      ≤ (P.blockInfo spot opts k).offices := by
+    simp only [Plan.blockInfo, hP.1, Lines.make]
+    rw [getD_ofFn _ _ _ hk]
+    simp only [Transit.neighborsOf, List.filter_filter, List.filter_map, List.length_map]
+    apply length_filter_mono
+    intro j _ h
+    simp only [Bool.and_eq_true, Function.comp_apply] at h ⊢
+    exact ⟨(hspot j).1.2 h.1, List.any_eq_true.2 ⟨T, hT, h.2⟩⟩
+  have hfood : (T.neighborsOf P.c k).any (fun j => (look j).isFood) = true →
+      (P.blockInfo spot opts k).food = true := by
+    intro h
+    obtain ⟨j, hj, hf⟩ := List.any_eq_true.1 h
+    have hn : T.isNeighbor P.c k j = true := (List.mem_filter.1 hj).2
+    have hj' : (j, P.group.all (·.isNeighbor P.c k j)) ∈ P.L.neighbors.getD k [] := by
+      rw [hP.1]; simp only [Lines.make]; rw [getD_ofFn _ _ _ hk]
+      exact List.mem_map.2 ⟨j, List.mem_filter.2 ⟨(List.mem_filter.1 hj).1,
+        List.any_eq_true.2 ⟨T, hT, hn⟩⟩, rfl⟩
+    simp only [Plan.blockInfo]
+    exact List.any_eq_true.2 ⟨_, hj', (hspot j).2.1.2 hf⟩
+  unfold officeBonus bonusCap
+  split
+  · have h1 : min officeBonusMax (officeBonusPerOffice * ((T.neighborsOf P.c k).filter fun j => (look j).isOffice).length)
+        ≤ min officeBonusMax (officeBonusPerOffice * (P.blockInfo spot opts k).offices) :=
+      by have := Nat.mul_le_mul_left officeBonusPerOffice hoff; omega
+    have h2 : (if (T.neighborsOf P.c k).any (fun j => (look j).isFood) then lunchBonus else 0)
+        ≤ (if (P.blockInfo spot opts k).food then lunchBonus else 0) := by
+      by_cases hf : (T.neighborsOf P.c k).any (fun j => (look j).isFood) = true
+      · simp [hf, hfood hf]
+      · simp only [hf, Bool.false_eq_true, ite_false]; exact Nat.zero_le _
+    omega
+  · simp
+
+theorem bonusCap_le (info : BlockInfo) (b : Building) : bonusCap info b ≤ 60 := by
+  unfold bonusCap officeBonusMax lunchBonus
+  split
+  · split <;> omega
+  · omega
+
+/-- Productivity, split: `workerPrice` per job filled by cats from town, plus
+at most `jobsCapW` from downtown workers. -/
+theorem productivity_le_W (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
+    (spot : Nat → Spot) (opts : Nat → List Building) (look : Nat → Building)
+    (hspot : ∀ j, (spot j).Admits (look j)) (k : Nat) (hk : k < P.c.puzzle.blockCount) :
+    blockProductivity P.c T (simulate P.c T look) look k
+      ≤ workerPrice * min (look k).jobs (localWorkers (simulate P.c T look) k)
+        + jobsCapW (P.blockInfo spot opts k) (look k) := by
+  have hB := officeBonus_le P hP T hT spot opts look hspot k hk
+  have hBc := bonusCap_le (P.blockInfo spot opts k) (look k)
+  have hR := reached_of P hP T hT spot opts k hk
+  unfold blockProductivity jobsFilled jobsCapW workerPrice jobWorth
+  generalize min (look k).jobs (localWorkers (simulate P.c T look) k) = L
+  have hM : stationWorkersAt P.c T (simulate P.c T look) look k
+      ≤ (if (P.blockInfo spot opts k).reached then min (look k).jobs stationWorkersPerBlock else 0) := by
+    unfold stationWorkersAt
+    by_cases h : T.stationReaches P.c k = true
+    · simp only [h, hR h, ite_true]; omega
+    · simp only [h, Bool.false_eq_true, ite_false]; exact Nat.zero_le _
+  generalize stationWorkersAt P.c T (simulate P.c T look) look k = M at hM
+  generalize (if (P.blockInfo spot opts k).reached then min (look k).jobs stationWorkersPerBlock else 0) = Mc at hM
+  generalize officeBonus P.c T look k = B at hB
+  generalize bonusCap (P.blockInfo spot opts k) (look k) = Bc at hB hBc
+  have a : 5 * L * (100 + B) ≤ 5 * L * 160 := Nat.mul_le_mul_left _ (by omega)
+  have b : 5 * M * (100 + B) ≤ 5 * Mc * (100 + Bc) := Nat.mul_le_mul (Nat.mul_le_mul_left _ hM) (by omega)
+  have e : 5 * (L + M) * (100 + B) = 5 * L * (100 + B) + 5 * M * (100 + B) := by
+    rw [Nat.mul_add 5, Nat.add_mul]
+  have h1 : 5 * (L + M) * (100 + B) ≤ 5 * Mc * (100 + Bc) + 100 * (8 * L) := by omega
+  calc 5 * (L + M) * (100 + B) / 100 ≤ (5 * Mc * (100 + Bc) + 100 * (8 * L)) / 100 := Nat.div_le_div_right h1
+    _ = 5 * Mc * (100 + Bc) / 100 + 8 * L := Nat.add_mul_div_left _ _ (by decide)
+    _ = 8 * L + 5 * Mc * (100 + Bc) / 100 := Nat.add_comm _ _
+
 /-- Downtown jobs of block `k` are at most `downtownCap`. -/
 theorem downtown_le (P : Plan) (hP : P.Sound) (T : Transit) (hT : T ∈ P.group)
     (spot : Nat → Spot) (opts : Nat → List Building) (look : Nat → Building)
@@ -1258,10 +1501,56 @@ theorem score_le_caps (p : Puzzle) (P : Plan) (hP : P.Sound) (hc : P.c = prepare
 theorem score_le_capsW (p : Puzzle) (P : Plan) (hP : P.Sound) (hc : P.c = prepare p)
     (opts : List (List Building)) (t : Solution) (hfit : FitsNode P opts t) :
     score p t ≤ ((capsOf P opts t second).map (·.1)).sum := by
-  have h := score_le_caps p P hP hc opts t hfit
-  have : capsOf P opts t second = capsOf P opts t first := by
-    simp [capsOf, first, second, Plan.capRow, valueCapW]
-  rw [this]; exact h
+  obtain ⟨hT, hopts⟩ := hfit
+  have hspot : ∀ j, (nodeSpot P opts j).Admits (t.look j) := fun j => by
+    unfold nodeSpot; rw [spotAt_eq]; exact Spot.admits_of _ _ (hopts j)
+  let c := P.c
+  let T := t.transit
+  let look := t.look
+  let d := simulate c T look
+  let info (k : Nat) := P.blockInfo (nodeSpot P opts) (optsAt opts) k
+  let base (k : Nat) : Int := bestMood c P.tables (info k) (look k) + jobsCapW (info k) (look k)
+    + salesCap (info k) (look k)
+  let extra (k : Nat) : Int := (workerPrice * min (look k).jobs (localWorkers d k) + downtownOutput d k : Nat)
+  have hblock : ∀ k ∈ c.blocks, blockValue c T d look k ≤ base k + extra k := by
+    intro k hk
+    have hk' := List.mem_range.1 hk
+    have h1 := mood_le P hP T hT (nodeSpot P opts) (optsAt opts) look hopts k hk'
+    have h2 := productivity_le_W P hP T hT (nodeSpot P opts) (optsAt opts) look hspot k hk'
+    have h3 := sales_le P hP T hT (nodeSpot P opts) (optsAt opts) look hspot k hk'
+    simp only [base, extra, info, d, c]
+    unfold blockValue
+    push_cast
+    omega
+  have hextra := extra_le_working c T look
+  have hcaps : ((capsOf P opts t second).map (·.1)).sum
+      = (c.blocks.map base).sum
+        + ((c.blocks.map fun k => (workerPrice * residentsPerCat * workingCats c k (look k) : Nat)).sum : Int) := by
+    simp only [capsOf, List.map_map]
+    rw [sum_map_natCast, ← sum_map_add_int]
+    congr 1
+    apply List.map_congr_left
+    intro k hk
+    simp only [Function.comp_apply, second, Plan.capRow, valueCapW, base, info]
+    rw [hP.2.2]
+    simp only [makeTables]
+    rw [readTable_eq]
+    push_cast
+    rfl
+  rw [hcaps]
+  unfold score scoreWith
+  dsimp only
+  rw [← hc, foldl_add_int]
+  have hsum : (c.blocks.map (blockValue c T d look)).sum ≤ (c.blocks.map base).sum + (c.blocks.map extra).sum := by
+    exact Int.le_trans (sum_le_sum_int _ _ _ hblock) (Int.le_of_eq (sum_map_add_int base extra _))
+  have hex : (c.blocks.map extra).sum
+      ≤ ((c.blocks.map fun k => (workerPrice * residentsPerCat * workingCats c k (look k) : Nat)).sum : Int) := by
+    have := Int.ofNat_le.2 hextra
+    rw [sum_map_natCast] at this
+    simp only [extra, d]
+    exact this
+  show (0 : Int) + (c.blocks.map (blockValue c T d look)).sum - (shortagePenalty c T d look : Int) ≤ _
+  omega
 
 theorem picks_capsOf (P : Plan) (opts : List (List Building)) (t : Solution)
     (hopts : ∀ j, t.look j ∈ optsAt opts j) (proj : Int × Int × Nat → Int × Nat) :
@@ -1333,6 +1622,22 @@ theorem knapsack_bound_ge (p : Puzzle) (P : Plan) (hc : P.c = prepare p) (vals :
   simp only [hpz]
   refine knapsack_ge _ _ _ _ hpicks (Nat.le_refl _) ?_
   exact Nat.le_trans hdiv (Nat.div_le_div_right hcost)
+
+/-- **The knapsack cut is safe**: if it cuts, no valid layout that fits the
+node scores more than `best`. -/
+theorem score_le_of_knapsackCut (p : Puzzle) (P : Plan) (hP : P.Sound) (hc : P.c = prepare p)
+    (opts : List (List Building)) (t : Solution) (hv : Valid p t) (hfit : FitsNode P opts t)
+    (best : Int) (h : P.knapsackCut (P.optionValues opts) best = true) : score p t ≤ best := by
+  unfold Plan.knapsackCut at h
+  rw [optionValues_eq] at h
+  simp only [Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h with h | h
+  · exact Int.le_trans (Int.le_trans (score_le_caps p P hP hc opts t hfit)
+      (knapsack_bound_ge p P hc _ _ (picks_capsOf P opts t hfit.2 first)
+        (caps_fit_budget p P hP hc opts t hv hfit first (fun _ => rfl)))) h
+  · exact Int.le_trans (Int.le_trans (score_le_capsW p P hP hc opts t hfit)
+      (knapsack_bound_ge p P hc _ _ (picks_capsOf P opts t hfit.2 second)
+        (caps_fit_budget p P hP hc opts t hv hfit second (fun _ => rfl)))) h
 
 /-- **The knapsack bound is safe**: no valid layout that fits the node scores
 more. -/

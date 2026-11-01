@@ -191,6 +191,8 @@ structure Leg where
   stop : Place
   mode : Mode
   phase : Phase
+  /-- The bus route, on a bus trip. -/
+  route : Option Nat := none
 deriving Repr, DecidableEq, Inhabited
 
 /-- A cat's trips, in order: to work, to lunch and back, home, out in the
@@ -198,13 +200,13 @@ evening and back home. -/
 def CatDay.legs (d : CatDay) : List Leg :=
   let home := Place.block d.who.home
   let w := d.work.getD home
-  (match d.work with | some p => [⟨home, p, d.mode, .commute⟩] | none => [])
+  (match d.work with | some p => [⟨home, p, d.mode, .commute, d.route⟩] | none => [])
   ++ (match d.lunch with
-      | some f => [⟨w, .block f, .walk, .lunch⟩, ⟨.block f, w, .walk, .lunch⟩]
+      | some f => [⟨w, .block f, .walk, .lunch, none⟩, ⟨.block f, w, .walk, .lunch, none⟩]
       | none => [])
-  ++ (match d.work with | some p => [⟨p, home, d.mode, .home⟩] | none => [])
+  ++ (match d.work with | some p => [⟨p, home, d.mode, .home, d.route⟩] | none => [])
   ++ (match d.evening with
-      | some v => [⟨home, .block v, .walk, .evening⟩, ⟨.block v, home, .walk, .home⟩]
+      | some v => [⟨home, .block v, .walk, .evening, none⟩, ⟨.block v, home, .walk, .home, none⟩]
       | none => [])
 
 /-- Follow trips from place `here`: where the cat ends up, or `none` if a trip

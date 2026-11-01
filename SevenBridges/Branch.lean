@@ -90,7 +90,7 @@ def Search.tryNode (P : Plan) (opts : List (List Building)) (vals : Caps)
   let st := st.spend
   if leastBuildCost P.c.puzzle opts + P.L.leastCost > P.c.puzzle.budget then st
   else if P.boundFrom vals ≤ st.bestScore then st
-  else if P.knapsackFrom vals ≤ st.bestScore then st
+  else if P.knapsackCut vals st.bestScore then st
   else go st
 
 /-- Search every layout with transit in `P.group` where block `j` holds one of

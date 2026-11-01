@@ -103,11 +103,11 @@ def handle (g : Game) (req : Json) : Except String (Json × Game) := do
     | some q, some v =>
       let info := info.setObjVal! "randomPlay"
         (Json.mkObj [("median", v.median), ("p95", v.p95), ("rated", v.rated)])
-      return (Json.mkObj [("generated", true), ("info", info),
+      return (Json.mkObj [("generated", true), ("info", info), ("seed", seed),
         ("verified", Json.mkObj [("theorem", "SevenBridges.solve_is_best"), ("simSeed", q.simSeed),
           ("bestScore", v.bestScore)]),
         ("puzzle", puzzleJson q)], { puzzle := q, best := some (some v.best) })
-    | _, _ => return (Json.mkObj [("generated", false), ("info", info)], g)
+    | _, _ => return (Json.mkObj [("generated", false), ("info", info), ("seed", seed)], g)
   | c => throw s!"unknown command {c}"
 
 partial def loop (g : Game) (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO Unit := do

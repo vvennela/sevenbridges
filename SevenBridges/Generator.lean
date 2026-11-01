@@ -174,14 +174,14 @@ def Size.ofBlocks (n : Nat) : Size :=
 /-- Most bridge sites a level of this size offers. -/
 def Size.bridgeSites : Size → Nat
   | .easy => 2
-  | .medium => 2
+  | .medium => 1
   | .hard => 1
 
 /-- Blocks along the metro line. -/
 def Size.metroLength : Size → Nat
   | .easy => 2
-  | .medium => 3
-  | .hard => 3
+  | .medium => 2
+  | .hard => 2
 
 /-- How many office heights a level offers (picked at random from 1–5). -/
 def Size.officeHeights : Size → Nat
@@ -248,19 +248,19 @@ def randomSolution (r : Rng) (p : Puzzle) : Solution × Rng :=
 
 /-- Random play: a random layout, cut down to the budget; if its transit
 breaks a rule, no transit. -/
-def randomPlay (r : Rng) (p : Puzzle) : Solution × Rng :=
+def randomPlay (c : Context) (r : Rng) (p : Puzzle) : Solution × Rng :=
   let (s, r) := randomSolution r p
   let s := trimToBudget p s
-  let s := if decide (ValidWith (prepare p) s) then s
+  let s := if decide (ValidWith c s) then s
     else trimToBudget p { s with routesOn := s.routesOn.map fun _ => false, station := none }
   (s, r)
 
 /-! ## Checks on a solved level -/
 
 /-- Random layouts tried when checking that random play does badly. -/
-def randomTries : Nat := 200
+def randomTries : Nat := 800
 /-- Most valid random layouts rated. -/
-def randomRated : Nat := 200
+def randomRated : Nat := 500
 
 /-- The rating at percent `q` of a sorted list of ratings. -/
 def percentile (sorted : Array Nat) (q : Nat) : Nat :=
@@ -272,7 +272,7 @@ def randomRatings (p : Puzzle) (bestScore : Int) (seed : Nat) : Array Nat :=
   let c := prepare p
   let (ratings, _) := (List.range randomTries).foldl (fun (acc, r) _ =>
     if acc.size ≥ randomRated then (acc, r) else
-    let (s, r) := randomPlay r p
+    let (s, r) := randomPlay c r p
     if decide (ValidWith c s) then (acc.push (ratingWith c bestScore s), r) else (acc, r))
     ((#[] : Array Nat), (⟨seed⟩ : Rng))
   ratings.qsort (· < ·)
@@ -314,9 +314,9 @@ def Verdict.accepted (v : Verdict) : Bool :=
 /-! ## The generator, with a step budget -/
 
 /-- Most steps one attempt may take. -/
-def attemptFuel : Nat := 900000
+def attemptFuel : Nat := 450000
 /-- Most steps the whole generator may take. -/
-def generatorStepBudget : Nat := 1800000
+def generatorStepBudget : Nat := 1700000
 /-- Most attempts. -/
 def maxAttempts : Nat := 40
 /-- Work counted for checking one level besides the search: each random

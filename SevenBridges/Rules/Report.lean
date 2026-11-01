@@ -72,6 +72,18 @@ structure GroupChange where
   change : Int
 deriving Repr, DecidableEq, Inhabited
 
+/-- How much a neighbor's value changes when a block is left empty. -/
+structure NeighborChange where
+  block : Nat
+  change : Int
+deriving Repr, DecidableEq, Inhabited
+
+/-- Cars on one road segment: the driving cats of the blocks it borders. -/
+structure StreetReport where
+  segment : Nat
+  cars : Nat
+deriving Repr, DecidableEq, Inhabited
+
 /-- Facts about one block in a layout. The impacts compare the layout with the
 same layout where this block is left empty. -/
 structure BlockReport where
@@ -87,6 +99,11 @@ structure BlockReport where
   traffic : Bool
   /-- Traffic and no park next door. -/
   polluted : Bool
+  /-- Cats of this block and the blocks next to it who drive. -/
+  cars : Nat
+  /-- For each block next to this one: how much that block's value would
+  change if this block were empty (negative: this block helps it). -/
+  neighbors : List NeighborChange
   /-- Total happiness in the neighborhood, minus that with this block empty. -/
   moodImpact : Int
   /-- Score, minus the score with this block empty. -/
@@ -141,6 +158,8 @@ structure Report where
   cats : List CatReport
   /-- Car trips in the morning (cats who drive). -/
   carTrips : Nat
+  /-- Cars on each road segment that has any. -/
+  streets : List StreetReport
   score : Int
 deriving Repr, Inhabited
 
@@ -196,6 +215,12 @@ def blockReport (c : Context) (s : Solution) (d : List CatDay) (i : Nat) : Block
     crime := blockCrime c T d look i
     traffic := traffic c T d i
     polluted := traffic c T d i && !(T.neighborsOf c i).any fun j => (look j).isPark
+    cars := (d.filter fun cd => cd.mode == .car
+      && (cd.who.home == i || (T.neighborsOf c i).contains cd.who.home)).length
+    neighbors :=
+      let dw := simulate c without.transit without.look
+      (T.neighborsOf c i).map fun j =>
+        ⟨j, blockValue c T dw without.look j - blockValue c T d look j⟩
     moodImpact := totalHappiness c s - totalHappiness c without
     scoreImpact := scoreWith c s - scoreWith c without
     groupImpact := (List.range c.groupCount).map fun gi =>
@@ -265,6 +290,11 @@ def evaluateWith (c : Context) (s : Solution) : Report :=
     blocks := c.blocks.map (blockReport c s d)
     cats := catReports c s d
     carTrips := (d.filter fun cd => cd.mode == .car).length
+    streets := (List.range p.map.segments.length).filterMap fun k =>
+      let side := (p.map.segments.getD k default).side
+      let cars := (d.filter fun cd => cd.mode == .car
+        && (p.map.block cd.who.home).sides.contains side).length
+      if cars = 0 then none else some ⟨k, cars⟩
     score := scoreWith c s }
 
 /-- The full report for a layout. -/
