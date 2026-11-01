@@ -312,7 +312,7 @@ function startTitle() {
 /** Start → pick a size → Lean makes the town and proves its best plan → play. */
 async function playNew(size: Size, seed = randomSeed()) {
   showScreen("wait");
-  $("wait-text").textContent = "Generating your town and proving its best plan…";
+  $("wait-text").textContent = "Building your town…";
   try {
     const { pr, info } = await newTown(seed, size);
     history.replaceState(null, "", urlWith({ seed: String(info.seed), size: info.size }));
@@ -363,7 +363,6 @@ function showIntro() {
   const meta = [
     level ? `Town #${level.seed}` : pz.name,
     level?.simSeed !== undefined ? `simulation #${level.simSeed}` : null,
-    level?.verified ? `best plan proven ✓` : null,
   ].filter(Boolean).join(" · ");
   const sizeName = level ? `${level.size[0].toUpperCase()}${level.size.slice(1)} town, ${pz.map.blocks.length} blocks` : `${pz.map.blocks.length} blocks`;
   const who = pz.groups.map((g, i) => `<span class="intro-who">${ICON.avatar(groupColor(i), AVATAR_FUR[i % AVATAR_FUR.length], i % 2 ? "scarf" : "tie")}${esc(g.name)} <small>${g.share}%</small></span>`).join("");
@@ -371,7 +370,7 @@ function showIntro() {
     <div class="intro-kicker">${esc(sizeName)}</div>
     <h2>${esc(level ? `Town #${level.seed}` : pz.name)}</h2>
     ${level?.simSeed !== undefined || level?.verified ? `<div class="intro-meta">${esc(meta)}</div>` : ""}
-    ${level?.verified ? `<p class="intro-proof">Lean checked this town's best plan against its simulated day${level.randomMedian !== undefined ? ` (random play scores about ${level.randomMedian}/100)` : ""}.</p>` : ""}
+
     <div class="intro-whos">${who}</div>
     <button class="tbtn primary" data-act="go">Let's build</button></div>`);
   $("intro").classList.remove("hidden");
@@ -381,7 +380,7 @@ function hideIntro() { $("intro").classList.add("hidden"); coach(); }
 async function boot() {
   try {
     if (wantedSeed !== null) {
-      $("loading-text").textContent = "Generating your town and proving its best plan…";
+      $("loading-text").textContent = "Building your town…";
       const { pr, info } = await newTown(wantedSeed, wantedSize);
       if (info.seed !== wantedSeed) history.replaceState(null, "", urlWith({ seed: String(info.seed), size: info.size }));
       enterLevel(pr, info);
@@ -688,7 +687,7 @@ function renderTown() {
   const chips = [
     `<span class="diff">${sizeName}, ${pz.map.blocks.length} blocks</span>`,
     level?.simSeed !== undefined ? `<span class="chip" data-tip="The seed of this town's simulated day: every cat's traits and day come from it">Sim #${level.simSeed}</span>` : "",
-    level?.verified ? `<span class="chip ok" data-tip="Lean has proven the best plan for this town, so 100 means no plan can do better">${ICON.check()} Best plan proven</span>` : "",
+    "",
   ].join("");
   setHTML("town", `<div class="town-head"><h1>${esc(level ? `Town #${level.seed}` : pz.name)}</h1>
       <span class="head-btns"><button class="icon-btn" data-act="new" data-tip="A new random town, same size">${ICON.dice()}</button>
@@ -738,7 +737,7 @@ function renderMeter() {
       <div class="ring-num">${rated === null ? "?" : rated}</div>
     </div>
     <div class="stars">${stars}</div>
-    <div class="ring-cap">${rated === null ? (st.mode === "built" ? "Lean is rating…" : "Build to see your rating") : rated >= 100 ? "A perfect neighborhood" : "Your rating"}</div>
+    <div class="ring-cap">${rated === null ? (st.mode === "built" ? "Rating…" : "Build to see your rating") : rated >= 100 ? "A perfect neighborhood" : "Your rating"}</div>
     <div class="pair">
       <div class="pair-cell" data-tip="Happiness: how much your cats like their homes and what's next door">${ICON.heart()}<b>${r ? r.report.happiness.toLocaleString() : "0"}</b><span>Happiness</span></div>
       <div class="pair-cell" data-tip="Productivity: the work done in offices by cats who can get there">${ICON.work()}<b>${r ? r.report.productivity.toLocaleString() : "0"}</b><span>Productivity</span></div>
@@ -825,14 +824,14 @@ function renderPostcard() {
   el.classList.toggle("hidden", !show);
   document.body.classList.toggle("pc-open", show);
   if (!show) return;
-  if (!r) { setHTML("postcard", `<div class="pc-wait">Lean is rating your neighborhood…</div>`); return; }
+  if (!r) { setHTML("postcard", `<div class="pc-wait">Rating your neighborhood…</div>`); return; }
   const rating = r.rating?.rating ?? 0;
   const { headline, notes } = notesFrom(r);
   const stars = [50, 80, 100].map((th) => `<span class="star big">${ICON.star(rating >= th)}</span>`).join("");
   setHTML("postcard", `
     <div class="pc-stamp">${rating >= 100 ? "A perfect neighborhood!" : rating >= 80 ? "What a lovely place" : rating >= 50 ? "A cozy start" : rating > 0 ? "Room to grow" : "Not quite working yet"}</div>
     <div class="pc-stars">${stars}</div>
-    <div class="pc-sub">Rated ${rating} out of 100. A 100 means no plan can do better, and Lean has proved it.</div>
+    <div class="pc-sub">Rated ${rating} out of 100.</div>
     <div class="pc-head">${esc(headline)}</div>
     <ul class="pc-notes">${notes.map((n) => `<li><span class="pc-ic">${n.icon}</span><span>${esc(n.text)}</span></li>`).join("")}</ul>
     ${whyRating(r)}
@@ -1017,14 +1016,14 @@ function routeDetails(i: number, r: EvalReply | null): string {
   const flagged = (r?.problems ?? []).filter((p) => p.includes(name));
   return `<div class="card-sec"><div class="whys"><b>Riders:</b>${rr.riders} a day (needs ${pr.numbers.minRouteRiders})</div>
     ${rr.newRiders !== undefined ? `<div class="whys"><b>New riders:</b>${rr.newRiders}${pr.numbers.minNewRiders !== undefined ? ` (needs ${pr.numbers.minNewRiders})` : ""}</div>` : ""}
-    ${flagged.length ? flagged.map((p) => `<div class="flag bad">${esc(p)}</div>`).join("") : `<div class="flag ok">Lean found no problem with this route</div>`}</div>`;
+    ${flagged.length ? flagged.map((p) => `<div class="flag bad">${esc(p)}</div>`).join("") : `<div class="flag ok">This route runs fine</div>`}</div>`;
 }
 
 function stationDetails(r: EvalReply | null): string {
   if (!r || shownSolution().station === null) return "";
   const flagged = r.problems.filter((p) => /station|subway|metro/i.test(p));
   return `<div class="card-sec"><div class="whys"><b>Riders:</b>${r.report.stationRiders} a day (needs ${st.pr!.numbers.minStationRiders})</div>
-    ${flagged.length ? flagged.map((p) => `<div class="flag bad">${esc(p)}</div>`).join("") : `<div class="flag ok">Lean found no problem with the station</div>`}</div>`;
+    ${flagged.length ? flagged.map((p) => `<div class="flag bad">${esc(p)}</div>`).join("") : `<div class="flag ok">The station runs fine</div>`}</div>`;
 }
 
 /** What a building type does, for the tray tooltip. Facts only. */
@@ -1273,7 +1272,7 @@ function showLinks(t: Target | null) {
         const name = KIND_NAME[st.build[j].kind].toLowerCase();
         const catNote = cats && cats.tone !== "none" ? ` <small class="lk-cats">${cats.html.replace(/<\/?span[^>]*>/g, "")}</small>` : "";
         const html = pts === 0 ? `<span class="lk none">no effect</span>` : `<span class="lk ${tone}"><b class="${pts > 0 ? "plus" : "minus"}">${pts > 0 ? "+" : "−"}${Math.abs(pts)}</b>${catNote}</span>`;
-        const tip = pts === 0 ? `The ${name} next door doesn't change this block's score` : `The ${name} next door ${pts > 0 ? "adds" : "takes away"} ${Math.abs(pts)} points here (Lean: this block's value with that one empty)${cats && cats.tip ? `. ${cats.tip}` : ""}`;
+        const tip = pts === 0 ? `The ${name} next door doesn't change this block's score` : `The ${name} next door ${pts > 0 ? "adds" : "takes away"} ${Math.abs(pts)} points here${cats && cats.tip ? `. ${cats.tip}` : ""}`;
         links.push({ from: j, to: i, tone, html, tip });
       }
       links.push(...commuteLinks(i));
@@ -1312,7 +1311,7 @@ function tickClock() {
     clockPhase = c.phase;
     el.innerHTML = `<span class="dc-ic">${c.phase >= 2 ? ICON.moon() : ICON.sun()}</span><span class="dc-name">${PHASE_NAME[c.phase]}</span>
       <span class="dc-steps">${PHASE_NAME.map((_n, k) => `<i class="${k < c.phase ? "done" : k === c.phase ? "now" : ""}"><s></s></i>`).join("")}</span>`;
-    el.dataset.tip = "The day Lean simulated for this town: every cat you see follows it";
+    el.dataset.tip = "A day in this town";
   }
   const now = el.querySelector<HTMLElement>(".dc-steps i.now s");
   if (now) now.style.width = `${Math.round(c.u * 100)}%`;
