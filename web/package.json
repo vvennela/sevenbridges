@@ -1,0 +1,26 @@
+{
+  "name": "sevenbridges-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "npm --prefix ../server install --no-audit --no-fund && npm --prefix ../tools install --no-audit --no-fund",
+    "dev": "concurrently -k -n bridge,vite -c magenta,cyan \"npm --prefix ../server start\" \"vite\"",
+    "bridge": "npm --prefix ../server start",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "screenshot": "node scripts/screenshot.mjs"
+  },
+  "dependencies": {
+    "@fontsource/fredoka": "5.3.0",
+    "@fontsource/nunito": "5.3.0",
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "concurrently": "10.0.6",
+    "playwright": "1.64.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}
