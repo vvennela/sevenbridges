@@ -1,10 +1,10 @@
 # Seven Bridges: Design
 
 Seven Bridges is a small neighborhood-planning puzzle. Each puzzle is a
-neighborhood of 5–9 blocks. The player chooses what to build on each block,
-which bus routes to run, and whether to build a subway station. Lean computes
-the score, and Lean proves that the game's "best possible layout" really is
-the best.
+neighborhood of 5–8 blocks. The player chooses what to build on each block,
+which bus routes to run, and whether to build a metro station. Lean simulates
+the cats' day, computes the score, and proves that the game's "best possible
+layout" really is the best.
 
 Items marked **[ASSUMED]** are placeholders. Change them freely.
 
@@ -34,7 +34,7 @@ The map is a **road network**: intersections joined by road segments.
 Each intersection has whole-number x, y coordinates.
 
 - A **block** is an area enclosed by roads. It is given by the loop of
-  intersections around its edge. A neighborhood has **5–9 blocks**.
+  intersections around its edge. A neighborhood has **5–9 blocks** (generated levels: 5, 7 or 8).
 - Two blocks are **neighbors** if they share a road segment on land, or a
   river segment with a bridge built on it (§2.4).
 - A segment's **length** is the distance between its two ends, rounded to a
@@ -80,8 +80,7 @@ draws roads from Lean's segments, so the drawing and the rules can't disagree.
   would be 0.)
 - **Bus stops** are at intersections. A block is **served** if a bus route
   that is on stops at an intersection on its edge.
-- **The subway** runs underground. It does not use streets and does not slow
-  traffic (§4.2).
+- **The metro** runs underground to downtown (§4.2). It does not use streets.
 
 ### 2.4 The river and bridges
 
@@ -114,35 +113,27 @@ or `stream`.
 
 Each block gets **one** of these:
 
-| Option | Stories | Provides |
+| Option | Floors | Provides |
 |---|---|---|
 | Empty | – | nothing |
-| Housing | 1–3 | homes |
-| Office | 1–3 | jobs |
-| Shop | 1–3 | jobs and shopping |
-| Park | – | green space |
-| Bar | – | nightlife and some jobs |
+| Housing | 1–3 | homes: 20 residents (4 cats) per floor |
+| Office | 1–5 | 20 jobs per floor |
+| Shop | 1–2 | sales to 20 customers a day per floor |
+| Food (café/restaurant) | – | lunch for offices next door, dinner for neighbors |
+| Park | – | green space, clean air next door |
+| Bar | – | nightlife |
 
-That's 12 choices in the full catalog.
+That's 14 choices in the catalog (`Building.catalog`). A building of 3 or
+more floors, and a bar, is **loud**: it breaks "quiet" next door. Costs:
+housing 100, office 120, shop 80 per floor, plus 30 per floor above the
+first; food 70, park 40, bar 60.
 
-Per story: housing has 20 residents, an office has 20 jobs, a shop serves
-20 customers a day. Only offices have jobs. Parks and bars score no points of
-their own: they matter through their neighbors (§5.2).
+### 3.2 Each level limits the choices
 
-Taller buildings give more homes or jobs, cost more, and make neighbors
-unhappy (see "quiet" in §5). That's why neither "all 3-story" nor
-"all 1-story" wins.
-
-### 3.2 Each puzzle limits the choices **[ASSUMED]**
-
-- **Allowed buildings.** Each puzzle allows about 6 of the 12 catalog
-  choices, for example "no bars, and offices up to 2 stories."
+- **Allowed buildings.** Each level allows some of the catalog (§8.5 sizes).
 - **No already-built blocks.** Generated levels start with every block open
   (`Generator.generate_no_fixed`). The rules still allow fixed blocks
   (`Puzzle.fixed`); only the Old Harbor test fixture uses them.
-
-These limits make puzzles more varied, and they are the cheapest way to keep
-the solver fast (§8.4).
 
 ---
 
@@ -158,89 +149,118 @@ the solver fast (§8.4).
 
 **Route rule.** A route that is on has its bridges built and at least
 `minRouteRiders` riders a day (daily cost ÷ fare, rounded up). Riders are
-residents who ride it to a job (they have no job next door, don't hate
-transit, and the route stops at a block with jobs), plus subway workers it
-carries from the station.
+the cats who ride it to work on the simulated day (5 residents each, §5.3),
+plus downtown workers it carries from the metro station, counting only those
+who got on a bus in the rush-hour process (§14.2).
 
-### 4.2 Subway station
+### 4.2 Metro line to downtown
 
-- The player may build **at most one** station, on any block (generated
-  puzzles list every block as a site).
-- The station sits on a block alongside whatever is built there.
+- A metro line enters the town at an edge block and runs 2 blocks inward
+  (`Puzzle.metroSites`, from the edge in; `Puzzle.metroEntry` is where it
+  enters, for drawing). The player may build **at most one** station, on one
+  of those blocks.
 - **Reach.** The station reaches its own block, its neighbors, and blocks one
-  bus ride away.
-- **Outside workers** come by subway to fill the jobs in reach that local
-  residents don't fill. They fill those jobs and reduce the housing shortage.
-- **Outside shoppers**: `shoppersPerShopStory` per shop story in reach. They
-  count as riders.
+  bus ride away (`Transit.stationReaches`).
+- Cats in reach can **ride the metro downtown** to work (or to study).
+- **Downtown workers** come by metro to fill the jobs in reach that cats from
+  town leave open, at most 20 per block, and outside shoppers come to shops
+  in reach.
+- Transit lovers like living by it; a station on or next to a block breaks
+  "quiet" there.
 
 **Station rule.** A station that is built has at least `minStationRiders`
-riders a day (outside workers plus outside shoppers).
+riders a day: cats riding it (5 residents each), downtown workers and
+shoppers.
 
-### 4.3 People from outside
+### 4.3 Cars
 
-Only by subway (§4.2): outside workers and shoppers. Gateways for outside cars
-and buses are not built.
+A working cat drives if it is a driver, or if nothing it can reach without
+a car has a free job and its block is not in metro reach (then it drives
+downtown). Car trips make **traffic** on the driver's block and the blocks
+next to it. Traffic breaks "quiet" and dirties the air (no "clean air"),
+unless a park is next door.
 
 ---
 
 ## 5. Residents and culture
 
-### 5.1 Groups and personalities
+### 5.1 Groups, personalities and cats
 
-Each puzzle has 2 resident groups with a fixed mix, for example "60% families,
-40% students". Every housing block holds that same mix.
+Each level has 2–3 resident groups from a pool: families, students,
+professionals, the elderly, artists, urbanites, rural newcomers
+(`Generator.groupPool`), with shares like 50/30/20. Each group has **2–3
+personality types**: the usual one, and one or two that flip one factor.
+Each group also says how its cats spend the day, in percent: work / study /
+retired, drive / bus / walk, eat out at lunch, go out in the evening.
 
-Each group has **2–3 personality types** (`Group.types`). The first is the
-usual one; most of the group has it. Each minority type flips one factor, for
-example "20% of Families are Night owls, who care about nightlife". A type's
-residents on a block are residents × group share × type share, rounded down.
+**Cats.** Each housing block has one cat per 5 residents. Cat number `i` on
+block `h` gets its traits from the level's simulation seed
+(`catTraits`, `Rules/Cats.lean`): its resident type (by the types' shares),
+what it does all day, how it gets around (a cat that hates transit always
+drives), and whether it eats out and goes out. Building more floors adds
+cats; the first cats stay the same.
 
 ### 5.2 Culture
 
 For each personality and each factor, the puzzle says whether it **cares
-about** it (+2), is **neutral** (+1), or **hates** it (−1).
+about** it (+2), is **neutral** (0), or **hates** it (−1).
 
-| Factor | A resident of a housing block has it if… |
+| Factor | Residents of a housing block have it if… |
 |---|---|
 | Parks | a park is next to their block |
 | Nightlife | a bar is next to their block |
 | Shops | a shop is next to their block |
-| Quiet | no 3-story building and no bar is next to their block |
+| Food | a café or restaurant is next to their block |
+| Quiet | nothing loud next door, no traffic, and no metro station on or next to the block |
 | Transit | a route that runs stops at their block, or the station is on or next to it |
 | Variety | at least 3 different kinds of building are next to their block |
+| Clean air | no traffic on their block, or a park next to it |
 
 "Next to" means a neighbor (§2.1): across the river only over a built bridge.
-The culture text is generated from the groups and their types, so it always
-matches the rules.
+
+### 5.3 One simulated day (`Rules/Day.lean`)
+
+The same every time for a layout and seed:
+
+1. **Morning commute.** Cats go one at a time, block by block. A working cat
+   takes a free job (one per 5 jobs) at an office it can reach: next door
+   first (walk), then one bus ride away (bus; walkers don't take the bus).
+   Drivers always drive (to such an office, or downtown). With no job in
+   reach, a cat rides the metro downtown if its block is in metro reach,
+   else drives downtown. Students ride the metro downtown if they can, else
+   study at home. Retired cats stay home.
+2. **Lunch.** A cat at an office that eats out walks to a café or restaurant
+   next to the office, and back.
+3. **Home** the same way it came.
+4. **Evening.** A cat that goes out walks to a bar next to home (or else a
+   café or restaurant), and back home.
+
+Bus riders wait for buses in the rush-hour process (§14.2); routes count
+the riders who got on. `report.cats` is exactly this day.
 
 ---
 
 ## 6. How a layout is scored
 
-A block's value depends only on the blocks it **watches**: itself, its
-neighbors, and blocks one bus ride away (`SevenBridges/Rules/Score.lean`).
+The layout and the seed decide the day (§5.3). Then for each block
+(`Rules/Score.lean`):
 
-For each block:
+1. **Happiness** (housing): each cat adds 5 × its happiness per person (its
+   personality's feelings about the factors its block has).
+2. **Crime** (housing): each cat below `unhappyLine` (1) costs
+   `unhappyCost` × (line − happiness) × 5.
+3. **Productivity** (offices): `jobWorth` (5) × filled jobs × (100 + bonus)
+   ÷ 100. Jobs are filled by the cats who came to work there (5 workers
+   each), plus downtown workers by metro. Bonus: 20% per office next door,
+   at most 40%, plus 20% with a café or restaurant next door (lunch).
+4. **Downtown jobs** (housing): 5 residents × 3 points for each working cat
+   that rides the metro downtown, × 1 point if it drives downtown.
+5. **Sales** (shops): `saleWorth` × min(customers it can serve, residents next
+   door or one bus ride away, plus metro shoppers).
 
-1. **Happiness** (housing): for each personality type of each group, its
-   residents there × its happiness per person (the sum of its feelings about
-   the factors it has).
-2. **Crime** (housing, a slope): for each type below `unhappyLine`,
-   `unhappyCost` × (line − happiness per person) × its residents there.
-3. **Productivity** (offices): `jobWorth` × filled jobs × (100 + office
-   bonus) ÷ 100. Jobs are filled by residents next door or one bus ride away;
-   if the station reaches the block, outside workers fill the rest. The office
-   bonus is `officeBonusPerOffice` % per neighboring office, at most
-   `officeBonusMax` %.
-4. **Sales** (shops): `saleWorth` × min(customers it can serve, residents
-   next door or one bus ride away).
-
-Bars and parks score nothing themselves.
-
-**Score** = sum over blocks of (happiness + productivity + sales − crime)
-− `shortageCost` × shortage, where shortage = jobs − homes − outside workers
-(never below 0). All numbers are whole numbers.
+**Score** = sum over blocks of (happiness + productivity + downtown jobs +
+sales − crime) − `shortageCost` × shortage (jobs − homes − downtown workers,
+never below 0). All numbers are whole numbers.
 
 **Rating** = 100 × (score − empty-town score) ÷ (best − empty-town score),
 rounded down, at least 0; invalid layouts get 0.
@@ -253,14 +273,14 @@ rounded down, at least 0; invalid layouts get 0.
   `years` of running) + the station, if built (the same) + `bridgeCost` per
   bridge built.
 
-A **solution** is one choice per block, the routes that are on, the station
-site (or none), and the bridges built. It is **valid** if:
+A **solution** is one choice per block, the routes that are on, the metro
+station (or none), and the bridges built. It is **valid** if:
 
 1. it fits the puzzle (allowed buildings, fixed blocks, one switch per route
-   and per bridge site, station on a listed site),
+   and per bridge site, station on a block along the metro line),
 2. total cost ≤ budget,
 3. every route that is on has its bridges built and at least
-   `minRouteRiders` riders, and
+   `minRouteRiders` riders on the simulated day, and
 4. the station, if built, has at least `minStationRiders` riders.
 
 The empty layout (nothing built, no routes, no station, no bridges) is always
@@ -313,7 +333,7 @@ Run `#spec_surface solve_is_best` to list exactly what to read.
 - **Reference comparison**: on small puzzles, `solve` gives the same score as
   plain search through every solution (`bestByChecking`).
 
-### 8.4 Keeping the solver under a second for 9 blocks
+### 8.4 Keeping the solver fast
 
 Without limits, 12 choices on 9 blocks, times bus routes, times station
 options, is tens of billions of solutions. Compiled Lean can score about a
@@ -328,137 +348,94 @@ million per second. These steps close the gap:
 | 5. Step limit | stop and return `none` after a fixed number of steps | worst case capped | small |
 | 6. Parallel | each bus-and-station combination on its own core | ÷ number of cores | none (take the best) |
 
-**How the bounds work.** The generator already knows a lower bound: the
-planted solution's score L. For any partial layout, the upper bound U is the
-score so far, plus each open block's best possible score, plus the best
-possible neighbor bonuses. If U ≤ L, nothing in that branch can win, so it's
-skipped. Blocks with the most neighbors are filled first, so neighbor bonuses
-become exact early and the cuts get sharper.
+**How the bounds work.** For a search node (each block's remaining options,
+and a group of transit choices) each block gets a **cap** for each option,
+from what is still possible next to it (`Bound.lean`): facts that could
+happen count if good, facts that must happen count if bad. The bound is the
+best sum of caps within the budget (a knapsack), or a quicker trade-off
+estimate. Two caps are tried, and the smaller bound is used:
 
-If the bound for the empty layout already equals L, the proof needs no search
-at all.
+- `valueCap`: happiness at the best mix of neighbors, every job an office
+  could fill, every downtown job a block's working cats could have, sales.
+- `valueCapW`, which **counts each worker once**: a cat works in one place,
+  so instead of counting jobs at the offices, it counts at home 40 points
+  (5 residents × 8, the most a worker makes with the biggest office bonus)
+  per working cat, and at the offices only the downtown workers.
 
-**Why not binary search on the score?** Each question "is there a layout
-scoring at least T?" costs a full search when the answer is no. Asking once,
-at T = L + 1, is the cheapest question.
+Traffic from the cats' day is bounded with the same could/must idea: a
+block whose cats work could have cars; one with a working driver surely has
+them.
 
-**What the proof needs:**
+**What the proof needs** (`BoundProofs.lean`, `DayProofs.lean`):
 
-- **Bounds are correct:** no completion of a partial layout scores above its
-  bound. One lemma per part of the score (block value, neighbor bonuses,
-  crime, transit).
-- **Cutting is safe:** if a branch's bound ≤ L, nothing in it beats L.
-- **Nothing is missed:** the search covers every solution that wasn't cut.
+- **Bounds are correct:** no valid layout in a node scores above its bound
+  (`score_le_bound`, `score_le_of_knapsackCut`). One lemma per part of the
+  score; the day facts used: a cat only works where it can get to, only
+  working cats drive, working drivers always drive, only cats in metro reach
+  ride the metro, and each cat is in the day once.
+- **Cutting is safe**, and **nothing is missed** (`BranchProofs.lean`).
 
-Start with steps 1, 2 and 5 on plain search. Add steps 3, 4 and 6 when
-puzzles need it.
+### 8.5 Level generation
 
-### 8.5 Puzzle generation: solution first, then the puzzle
+`SevenBridges/Generator.lean`, not trusted: `solve_is_best` guarantees the
+best plan of every level it returns.
 
-The generator picks the answer first, then builds the puzzle around it.
+1. **Map** from `tools/genmap.mjs` (§2.2).
+2. **Random level**: 2–3 groups from the pool with random minority types,
+   allowed buildings (by size, below), bridge sites, the metro line (an
+   edge block and the touching block closest to the middle), and the
+   simulation seed. No starting blocks.
+3. **Budget**: the cost of a random layout plus 60–160.
+4. **Proof**: run `solve` with at most `attemptFuel` steps.
+5. **Keep** the level if the best plan has homes and beats the empty town,
+   and **random play does badly**: of up to 500 random layouts that fit the
+   budget (random choices, cut to the budget, transit dropped if it breaks a
+   rule), the median rates at most 50 and 95% rate at most 85.
+6. Otherwise try another random level on the same map, until
+   `generatorStepBudget` steps are used. The bridge then tries up to two new
+   maps (seed + 7919, + 2·7919).
 
-1. **Map.** Make the roads and blocks (§2.2).
-2. **Plant a solution.** Pick a **random** layout, route set and station
-   choice. Throw it away at once if it is obviously dull, for example no
-   housing, no jobs, or every block the same.
-3. **Fit the puzzle to it.**
-   - Culture: choose groups and their cares/hates so the planted layout's
-     features are rewarded and its alternatives are penalized.
-   - Limits: choose the allowed buildings and any fixed blocks (§3.2).
-   - Routes: offer the planted routes plus 1 decoy that fails a route rule
-     (for example, a decoy that only takes riders from a planted route).
-   - Budget: the planted solution's cost plus a small margin.
-4. **Quick check (fast, not proven).** Try every small change to the planted
-   solution: change one block, change one height, turn one route on or off,
-   or move the station. That's about 100 tries. If any of them scores higher,
-   adjust the culture or budget against that change and try again. Most bad
-   attempts fail here in milliseconds.
-5. **Gap check.** Compute the upper bound U for the whole puzzle (§8.4). If
-   U − L is too large, the proof would be slow: tighten the budget, fix a
-   block, or adjust the culture, then go back to step 4.
-6. **Full check with the proven solver.** Run `solve`. Keep the puzzle only if
-   all the checks below pass.
-7. If the full check fails, adjust against the better solution `solve`
-   found, as in step 4, and check again. After a few failed rounds
-   **[ASSUMED: 5]**, start over with a new seed.
+**Sizes.** Less choice on bigger maps, so the proven solver finishes in time:
 
-**Checks in step 6.**
+| Size | Blocks | Homes | Offices | Food, shop, bar, park | Shops | Metro blocks | Bridge sites |
+|---|---|---|---|---|---|---|---|
+| easy | 5 | 1–3 floors | 3 random heights of 1–5 | all 4 | 1–2 floors | 2 | up to 2 |
+| medium | 7 | 1–3 | 1 random height | 3 of 4 | 1–2 | 2 | 1 |
+| hard | 8 | 1–2 | 1 random height | 2 of 4 | 1 | 2 | 1 |
 
-The puzzle must be correct:
-
-- `solve` returns a solution (didn't run out of steps),
-- its score equals the planted score, and no other valid solution reaches it
-  (the best is **unique**).
-
-The puzzle must be interesting:
-
-- the best solution **uses transit** (a bus route or the station),
-- the culture **matters**: with every factor set to neutral, the best
-  solution changes.
-
-The puzzle must be **hard for the player** **[ASSUMED]**:
-
-- **Greedy fails.** Filling each block with whatever looks best for that block
-  alone scores well below the best, for example under 85%.
-- **Small fixes aren't enough.** From the greedy layout, making the single
-  best change over and over gets stuck below the best.
-- **There are traps.** Several clearly different layouts score within 5% of
-  the best.
-- **The best needs a non-obvious move,** for example leaving a block as a park
-  when an office there looks better, or skipping a route that looks useful.
-
-Fast to prove and hard to solve don't conflict. The solver sees the bounds
-and the planted score. The player sees neither, and a puzzle with many
-near-best traps can still have a small gap between U and L.
-
-**Built so far** (`SevenBridges/Generator.lean`): a random puzzle (groups
-with personalities, allowed buildings, bridge sites, built blocks), a random
-planted layout that sets the budget, then the proven solver. A puzzle is kept
-if its best layout uses transit (a route, the station or a bridge), has homes,
-and greedy play scores under 90% of it. The quick check (step 4) and the gap
-check (step 5) are not built.
-
-**Sizes.** The generator offers less choice on bigger maps, so the proven
-solver finishes in time:
-
-| Size | Blocks | Heights | Bridge sites | Blocks already built |
-|---|---|---|---|---|
-| easy | 5–6 | 1–3 | up to 3 | 0 |
-| medium | 7 | 1–3 | up to 2 | 1 |
-| hard | 8–9 | 1–2 (shops 1) | 1 | 3 |
-
-Bridge sites are first the river segments a route uses, so those routes can
-run.
-
-**The generator doesn't need a proof and isn't trusted.** It can be clever,
-messy, or written in TypeScript. Planting is only a way to aim for good
-puzzles. Step 6 is what guarantees the benchmark, and step 6 relies on
-`solve_is_best`. If the generator plants a solution that isn't the best,
-step 6 finds the better one and the puzzle is fixed or thrown away.
+Hard levels are 8 blocks, not 9: with 9 open blocks the proof took 2–10
+million steps (10–40 s).
 
 ### 8.6 Time limits, as proven step limits
 
-Lean can't prove anything about seconds. It proves a bound on **work** (search
-steps and layouts scored); seconds = work × time per step, measured.
+Lean can't prove anything about seconds. It proves a bound on **work**
+(search steps and random layouts tried); seconds = work × time per step,
+measured.
 
 | Theorem | Says |
 |---|---|
-| `solveWithFuel_steps_le` | the fast solver takes at most `fuel` steps (`searchFuel` = 3,000,000 in the game) |
+| `solveWithFuel_steps_le` | the fast solver takes at most `fuel` steps (`searchFuel` = 12,000,000 for `solve`) |
 | `solveWork_le` | plain search scores at most `stepLimit` layouts |
-| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (350,000) steps in total, at most `attemptFuel` (175,000) per attempt |
+| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (1,700,000) steps in total, at most `attemptFuel` (450,000) of search per attempt |
 
-Measured on this machine (12 cores): 5–25 µs per step, so the generator takes
-at most about 8.5 s. `node tools/timegen.mjs <binary> [blocks:seed …]`
-re-measures it. On 40 maps of 5–9 blocks, every run took ≤ 8.5 s; runs that
-found a puzzle took ≤ 4 s; about 1 in 10 runs gives up (the caller retries
-with another seed).
+Measured on this machine (12 cores), `node tools/timegen.mjs <binary>
+[blocks:seed …]`, one Lean call per map, seeds 31–36:
+
+| Size | Times (ms) | Found a level |
+|---|---|---|
+| easy (5) | 1850, 612, 1354, 468, 1130, 2537 | 6 of 6 |
+| medium (7) | 9951, 2413, 9857, 4211, 8563, 8551 | 5 of 6 |
+| hard (8) | 7544, 1789, 5344, 4100, 9034, 8622 | 4 of 6 |
+
+Every call took at most 10 s (about 5 µs per step). A call that finds no
+level is retried by the bridge on a new map.
 
 **The search.** Transit choices are grouped by (routes, bridges); each group
-holds every station choice. Routes on without their bridges are left out. The
-search splits each block's options (homes or not, then kind), then picks the
-transit, then heights. The work is first run piece by piece with 200,000
-steps; if that runs out, the pieces are dealt into 8 hands that run in
-parallel, each with an equal share of the fuel.
+holds every station choice. The search splits each block's options (homes
+or not, then kind), then picks the transit, then 3+ floors or not, then the
+building. The first guess climbs from the empty layout and from each allowed
+building on every block. Pieces run one after another with 50,000 steps; if
+that runs out, they are dealt into 12 hands that run in parallel.
 
 ---
 
@@ -476,14 +453,32 @@ Lean binary (all rules, solver, generator)
 
 | From → To | Message | Contents |
 |---|---|---|
-| Frontend → Lean | `newPuzzle` | seed |
-| Lean → Frontend | `puzzle` | blocks, roads, gateways, allowed buildings, fixed blocks, routes, station sites, groups, culture text, budget |
+| Frontend → Lean | `newPuzzle` | seed, size (`easy`, `medium`, `hard`) |
+| Lean → Frontend | `puzzle` | blocks, roads, allowed buildings, routes, `metroSites` (also as `stationSites`), `metroEntry`, `simSeed`, bridge sites, groups, culture text, budget |
 | Frontend → Lean | `evaluate` | a solution |
-| Lean → Frontend | `result` | valid?, which rules failed, cost, happiness, crime, productivity, score, trips for animation |
+| Lean → Frontend | `result` | valid?, which rules failed, the report (below) |
 | Frontend → Lean | `solve` | – |
-| Lean → Frontend | `best` | best solution, its score, name of the proven theorem |
+| Lean → Frontend | `best` | best solution, its report, name of the proven theorem |
 | Bridge → Lean | `generate` | a map and routes from `tools/genmap.mjs`, and a seed |
-| Lean → Bridge | `generated` | the new puzzle (now the current one), attempts and work used |
+| Lean → Bridge | `generated` | the new level (now the current one), `seed`, `info` (attempts, work, `randomPlay` {median, p95, rated}), `verified` |
+
+New JSON fields (Version 2):
+
+- `verified`: `{"theorem": "SevenBridges.solve_is_best", "simSeed": N, "bestScore": S}`.
+- `puzzle.simSeed`: number. `puzzle.metroSites`: block numbers, from the
+  edge in. `puzzle.metroEntry`: `{"x", "y"}`.
+- `report.cats`: one per cat, in town order: `{"id": "3-0", "home", "group",
+  "type", "mobility": "walker"|"bus"|"driver", "day": "works"|"studies"|"retired",
+  "eatsOut", "goesOut", "happiness", "legs": [{"from", "to", "mode":
+  "walk"|"bus"|"car"|"metro", "phase": "commute"|"lunch"|"evening"|"home",
+  "route"?}]}`. A place is a block number or `"downtown"`; `route` is on bus
+  legs only.
+- `report.carTrips`: cats who drive. `report.streets`: `[{"segment", "cars"}]`,
+  the driving cats of the blocks each segment borders.
+- `report.blocks[]`: adds `traffic`, `polluted` (booleans), `cars` (driving
+  cats of the block and the blocks next to it), and `neighbors`:
+  `[{"block", "change"}]`, the neighbor's value with this block empty minus
+  its value now.
 
 The frontend never computes a score or decides a trip. It only animates the
 trips Lean returns.
@@ -664,7 +659,7 @@ Proofs about the process:
   - Connect the town: roads, bridges, buses, a metro to downtown. Cars work too, but bring traffic and pollution.
   - Stay within budget.
   - Your rating is out of 100. 100 is the best possible plan, proven by Lean for this town's cats.
-- **Every level is a new random map** (easy 5, medium 7, hard 9 blocks). No starting blocks.
+- **Every level is a new random map** (easy 5, medium 7, hard 8 blocks; hard was 9, cut to 8 so the proof fits in 10 s, §8.5). No starting blocks.
 - **Verified before you start**: a level opens only after Lean has proven its best plan.
   The title card shows the level's seed: "Town #N, simulation #N, best plan proven ✓".
 - **Two numbers matter**: happiness (homes) and productivity (jobs). The score adds them.
@@ -684,12 +679,19 @@ Proofs about the process:
   cat's happiness.
 - **The score is a function of the layout and the seed**, so `solve_is_best` proves the best
   plan for exactly this simulation. Different levels have different simulations.
-- **Proven about the simulation**: every cat ends the day at home; each cat is counted once;
-  buses never exceed capacity (already proven); boarded + left behind = waited (already proven).
+- **Proven about the simulation** (`DayProofs.lean`): every cat ends the day at home, along
+  trips that each start where the last one ended (`legs_return_home`); the day has one entry per
+  cat in town and no cat twice (`simulate_cats`, `population_nodup`); at every moment the cats at
+  all places add up to all cats (`cats_conserved`); buses never exceed capacity and
+  boarded + left behind = waited (`BusProofs.lean`).
 - The animation plays exactly the day Lean simulated (`report.cats`), so what you see is what
   was scored.
 
-### 15.3 Rules (still local, so the solver stays fast)
+### 15.3 Rules (bounded per block, so the solver stays fast)
+
+Built as described in §3–§6. Changes from the plan: neutral factors are worth 0 (only
+cares and hates count), the unhappy line is 1, and pollution is the "clean air" factor.
+
 
 | Building | Effect |
 |---|---|

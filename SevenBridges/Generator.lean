@@ -1,4 +1,5 @@
 import SevenBridges.BranchProofs
+import SevenBridges.Rules.Report
 
 /-!
 # Level generator (DESIGN.md §8.5, §15)
@@ -183,7 +184,8 @@ def Size.metroLength : Size → Nat
   | .medium => 2
   | .hard => 2
 
-/-- How many office heights a level offers (picked at random from 1–5). -/
+/-- How many office heights a level offers: one of 1–2 floors, and the rest
+at random from 1–5. -/
 def Size.officeHeights : Size → Nat
   | .easy => 3
   | .medium => 1
@@ -221,7 +223,10 @@ already built. -/
 def randomPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) :
     Puzzle × Rng :=
   let sz := Size.ofBlocks m.blockCount
-  let (offices, r) := r.choose allOfficeHeights sz.officeHeights
+  -- Office heights: always a low one (1 or 2 floors), then others at random.
+  let (low, r) := r.pick [Building.office .one, Building.office .two]
+  let (more, r) := r.choose (allOfficeHeights.filter (· != low)) (sz.officeHeights - 1)
+  let offices := low :: more
   let extras : List (List Building) :=
     [[.food], if sz = .hard then [.shop .one] else [.shop .one, .shop .two], [.bar], [.park]]
   let (kept, r) := r.choose extras (4 - sz.dropExtras)
@@ -286,6 +291,9 @@ structure Verdict where
   median : Nat
   p95 : Nat
   rated : Nat
+  /-- Happiness and productivity (with sales) of the best plan. -/
+  happiness : Int
+  productivity : Nat
 deriving Repr
 
 /-- Solve a level with `fuel` steps and judge it. Returns the verdict (`none`
@@ -294,8 +302,10 @@ def judge (p : Puzzle) (fuel : Nat) : Option Verdict × Nat :=
   let r := solveWithFuel p fuel
   if r.fuel = 0 then (none, r.steps) else
   let sorted := randomRatings p r.bestScore (p.simSeed + 17)
+  let rep := report p r.best
   (some { best := r.best, bestScore := r.bestScore, emptyScore := score p (emptyLayout p)
-          median := percentile sorted 50, p95 := percentile sorted 95, rated := sorted.size },
+          median := percentile sorted 50, p95 := percentile sorted 95, rated := sorted.size
+          happiness := rep.happiness, productivity := rep.productivity + rep.sales },
    r.steps)
 
 theorem judge_steps_le (p : Puzzle) (fuel : Nat) : (judge p fuel).2 ≤ fuel := by
@@ -304,19 +314,22 @@ theorem judge_steps_le (p : Puzzle) (fuel : Nat) : (judge p fuel).2 ≤ fuel := 
   simp only
   split <;> simp only <;> omega
 
-/-- Keep a level whose best plan has homes and beats the empty town, and where
-random play does badly: the median random valid layout rates at most 50, and
+/-- Keep a level whose best plan has homes and beats the empty town, gets
+both happiness and productivity, and where random play does badly: the median random valid layout rates at most 50, and
 95% of them rate at most 85. -/
 def Verdict.accepted (v : Verdict) : Bool :=
   v.best.build.any (·.isHousing) && decide (v.bestScore > v.emptyScore)
     && decide (v.rated ≥ 20) && decide (v.median ≤ 50) && decide (v.p95 ≤ 85)
+    -- Both numbers matter: happiness and productivity are each at least a
+    -- tenth of the best plan's score.
+    && decide (10 * v.happiness ≥ v.bestScore) && decide (10 * (v.productivity : Int) ≥ v.bestScore)
 
 /-! ## The generator, with a step budget -/
 
 /-- Most steps one attempt may take. -/
 def attemptFuel : Nat := 450000
 /-- Most steps the whole generator may take. -/
-def generatorStepBudget : Nat := 1700000
+def generatorStepBudget : Nat := 1500000
 /-- Most attempts. -/
 def maxAttempts : Nat := 40
 /-- Work counted for checking one level besides the search: each random

@@ -46,6 +46,21 @@ def sampleLayout : Solution :=
 
 #guard decide (FitsPuzzle oldHarbor sampleLayout)
 
+/-! ## The cats' day -/
+
+/-- The simulated day of the sample layout. -/
+def sampleDay : List CatDay := simulate (prepare oldHarbor) sampleLayout.transit sampleLayout.look
+
+-- One cat per 5 residents: 2 + 2 + 1 floors of homes, 4 cats a floor.
+#guard sampleDay.length == 20
+-- Every cat's trips start at home and end at home.
+#guard sampleDay.all fun cd => follow (.block cd.who.home) cd.legs == some (.block cd.who.home)
+-- Only cats who work drive.
+#guard sampleDay.all fun cd => cd.mode != .car || cd.who.traits.day == .works
+-- The same seed gives the same day; another seed gives other cats.
+#guard (simulate (prepare { oldHarbor with simSeed := 8 }) sampleLayout.transit sampleLayout.look).map
+    (·.who.traits) != sampleDay.map (·.who.traits)
+
 /-! ## The river -/
 
 /-- No bridges built, and the first bridge (between blocks 0 and 3) built. -/

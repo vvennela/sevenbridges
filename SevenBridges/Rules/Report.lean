@@ -97,7 +97,7 @@ structure BlockReport where
   crime : Nat
   /-- Cats of this block or next door drive. -/
   traffic : Bool
-  /-- Traffic and no park next door. -/
+  /-- Traffic, and no park on the block or next door. -/
   polluted : Bool
   /-- Cats of this block and the blocks next to it who drive. -/
   cars : Nat
@@ -214,7 +214,7 @@ def blockReport (c : Context) (s : Solution) (d : List CatDay) (i : Nat) : Block
     workers := jobsFilled c T d look i
     crime := blockCrime c T d look i
     traffic := traffic c T d i
-    polluted := traffic c T d i && !(T.neighborsOf c i).any fun j => (look j).isPark
+    polluted := traffic c T d i && !(look i).isPark && !(T.neighborsOf c i).any fun j => (look j).isPark
     cars := (d.filter fun cd => cd.mode == .car
       && (cd.who.home == i || (T.neighborsOf c i).contains cd.who.home)).length
     neighbors :=
