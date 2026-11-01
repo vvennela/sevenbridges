@@ -7,8 +7,9 @@ import { add, centroid, dist, mid, mul, norm, pointInPolygon, scaleAbout, segDis
 import { C } from "./palette";
 import type { Building } from "./types";
 import { Rng } from "./rng";
+import { alive } from "./ambient";
 
-export const MAT_MAIN = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 });
+export const MAT_MAIN = alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 }), { wind: true, clouds: true, windows: true });
 export const MAT_GLOW = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
 
 /** Height of a block's top surface. */
@@ -158,9 +159,12 @@ function flatRoof(m: GB, F: V2[], c: V2, y: number, cap: string) {
 }
 
 export function tree(m: GB, p: V2, s: number, r: Rng, base = 0, leaf = C.leaf) {
+  const sw0 = m.sway, sb0 = m.swayBase;
+  m.sway = 1 / Math.max(0.5, s); m.swayBase = base;
   m.geom(SHAPES.cyl, trs(p.x, base + 0.16 * s, -p.y, 0.05 * s, 0.32 * s, 0.05 * s), col(C.trunk));
   m.geom(SHAPES.ball, trs(p.x, base + 0.5 * s, -p.y, 0.3 * s, 0.28 * s, 0.3 * s, r.range(0, 6)), col(leaf));
   m.geom(SHAPES.ball, trs(p.x + 0.08 * s, base + 0.7 * s, -(p.y - 0.04 * s), 0.18 * s, 0.17 * s, 0.18 * s), col(C.leafLight));
+  m.sway = sw0; m.swayBase = sb0;
 }
 
 function lawn(m: GB, P: V2[], y: number, color = C.meadowDeep) {
@@ -366,7 +370,9 @@ type Occ = { p: V2; rad: number }[];
 const free = (occ: Occ, p: V2, pad: number) => occ.every((o) => dist(o.p, p) > o.rad + pad);
 
 function bush(m: GB, p: V2, s: number, r: Rng) {
+  m.sway = 0.6; m.swayBase = TILE_TOP;
   m.geom(SHAPES.ball, trs(p.x, TILE_TOP + 0.1 * s, -p.y, 0.2 * s, 0.15 * s, 0.2 * s, r.range(0, 6)), col(r.pick(["#5DB866", "#6CC473", "#4FAE5E"])));
+  m.sway = 0;
 }
 
 const FLOWERS = ["#FF8B7B", "#F7A8C8", "#FFE19A", "#FFFFFF", "#CDB6F3", "#FFB86B"];

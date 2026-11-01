@@ -6,13 +6,15 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MapCamera } from "./camera";
 import { GB, col, w3 } from "./builder";
 import { TILE_TOP, buildingHeight, fixedMarker, makeBuilding, tree, type LifeSpots, type Piece } from "./buildings";
-import { MAP_SCALE, add, ccw, centroid, dist, inset, insetEdges, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
+import { MAP_SCALE, segDist, add, ccw, centroid, dist, inset, insetEdges, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
 import { C } from "./palette";
 import { Rng, hashStr } from "./rng";
 import { Transit } from "./transit";
 import { RIVER_HALF, bridgeMesh, buildRiver, type BridgeView } from "./river";
 import type { Building, PuzzleReply } from "./types";
 import { Metro } from "./metro";
+import { U, alive, lightAt } from "./ambient";
+import { Birds, Farm, Lamps, MAT_OUTER, Smoke, buildOutskirts } from "./outskirts";
 import { Air, linkArcs, trafficWash, arcTop, type Link } from "./overlays";
 
 const ROAD_W = 0.62;
@@ -94,7 +96,8 @@ export class World {
     this.controls.enabled = false;
     this.cam = new MapCamera(this.camera, this.renderer.domElement);
 
-    this.scene.add(new THREE.HemisphereLight(0xd6ecff, 0xbfe0a0, 1.25));
+    this.hemi = new THREE.HemisphereLight(0xd6ecff, 0xbfe0a0, 1.25);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight(0xffe4bd, 2.6);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -175,6 +178,7 @@ export class World {
     this.scene.add(this.level);
     this.blocks = []; this.anims = []; this.bridges = []; this.bridgeOn = []; this.spots = new Map(); this.segOwners = new Map();
     this.links = null; this.transit = null; this.hovered = null; this.glowOn = new Set();
+    this.outskirts = null; this.farmAt = null; this.farm = null; this.smoke = null; this.birds = null; this.lamps = null; this.border = null; this.riverLines = [];
     this.metro = null; this.air = null; this.wash = null; this.linkGroup = null;
   }
 
@@ -205,7 +209,7 @@ export class World {
     this.riverSegs = new Set(riverSegs);
     this.segPts = pz.map.segments.map((s) => [pts[s.a], pts[s.b]] as [V2, V2]);
     this.roads(pts, pz.map.segments.filter((s) => s.terrain !== "stream"));
-    if (riverSegs.length) buildRiver(this.level as unknown as THREE.Scene, pts, pz.map.segments, riverSegs, new Set(outerLoop(pz.map.blocks.map((b) => b.corners))), c, this.seed);
+    this.riverLines = riverSegs.length ? buildRiver(this.level as unknown as THREE.Scene, pts, pz.map.segments, riverSegs, new Set(outerLoop(pz.map.blocks.map((b) => b.corners))), c, this.seed) : [];
     this.bridges = (pz.bridgeSites ?? []).map((seg, site) => {
       const s = pz.map.segments[seg];
       const a = pts[s.a], b = pts[s.b];
@@ -240,6 +244,33 @@ export class World {
       this.blocks.map((b) => b.center), outer, pz.routes, spots, this.seed);
     this.transit.groundAt = (p) => this.groundAt(p);
     this.spots = spots;
+    // life around town: cars on the outer streets and the lanes, cats idling in outer yards,
+    // lamp posts, birds now and then
+    const ok = this.outskirts;
+    if (ok) {
+      this.transit.setAmbientCars([...ok.streets.map(([a, b]) => ({ pts: [a, b], loop: true })), ...this.lanes.map((l) => ({ pts: l, loop: false }))]);
+      this.transit.ambientIdle = ok.idle;
+      this.transit.setIdlers([]);
+    }
+    const lampSpots = [...(ok?.lamps ?? [])];
+    for (const b of this.blocks) {
+      // two lamps per playable block, at its sharpest corners, on the sidewalk
+      const P = b.tilePoly;
+      const corners = P.map((v, k) => { const a = P[(k - 1 + P.length) % P.length], d = P[(k + 1) % P.length]; const u = norm(sub(a, v)), w = norm(sub(d, v)); return { v, k, c: u.x * w.x + u.y * w.y }; }).sort((x, y) => y.c - x.c);
+      for (const q of corners.slice(0, 2)) lampSpots.push(add(q.v, mul(norm(sub(b.center, q.v)), 0.14)));
+    }
+    this.lamps = new Lamps(this.level, lampSpots);
+    this.birds = new Birds(this.level, c, this.radius, this.seed);
+    // a soft line around the playable district, on the inner edge of the ring road
+    const bm = new GB();
+    const ring = outer.map((q) => add(q, mul(norm(sub(q, c)), -0.36)));
+    for (let k = 0; k < ring.length; k++) {
+      const a = ring[k], b = ring[(k + 1) % ring.length], d = norm(sub(b, a)), nn = v2(-d.y * 0.05, d.x * 0.05);
+      bm.quad(w3(add(a, nn), 0.03), w3(add(b, nn), 0.03), w3(sub(b, nn), 0.03), w3(sub(a, nn), 0.03), col("#FFC83D"), [0, 1, 0]);
+    }
+    this.border = new THREE.Mesh(bm.build(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.35, depthWrite: false }));
+    this.border.renderOrder = 2;
+    this.level.add(this.border);
 
     const t = new THREE.Vector3(c.x, 0, -c.y);
     this.controls.target.copy(t);
@@ -261,6 +292,16 @@ export class World {
   }
 
   private metroDir: V2 = v2(0, 1);
+  private riverLines: [V2, V2][] = [];
+  private lanes: V2[][] = [];
+  private outskirts: ReturnType<typeof buildOutskirts> | null = null;
+  private farmAt: V2 | null = null;
+  private farm: Farm | null = null;
+  private smoke: Smoke | null = null;
+  private birds: Birds | null = null;
+  private lamps: Lamps | null = null;
+  private hemi!: THREE.HemisphereLight;
+  private border: THREE.Mesh | null = null;
   metro: Metro | null = null;
   private air: Air | null = null;
   private wash: THREE.Mesh | null = null;
@@ -387,7 +428,7 @@ export class World {
   }
 
   private ground(c: V2) {
-    const g = new THREE.Mesh(new THREE.CircleGeometry(400, 64), new THREE.MeshStandardMaterial({ color: col(C.meadow), roughness: 1 }));
+    const g = new THREE.Mesh(new THREE.CircleGeometry(400, 64), alive(new THREE.MeshStandardMaterial({ color: col(C.meadow), roughness: 1 }), { clouds: true }));
     g.rotateX(-Math.PI / 2);
     g.position.set(c.x, -0.02, -c.y);
     g.receiveShadow = true;
@@ -406,7 +447,7 @@ export class World {
     const g = new THREE.ShapeGeometry(new THREE.Shape(v.map((q) => new THREE.Vector2(q.x, q.y))));
     g.rotateX(-Math.PI / 2);
     g.translate(0, -0.01, 0);
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: col(C.meadowDeep), roughness: 1 }));
+    const m = new THREE.Mesh(g, alive(new THREE.MeshStandardMaterial({ color: col(C.meadowDeep), roughness: 1 }), { clouds: true }));
     m.receiveShadow = true;
     this.level.add(m);
   }
@@ -429,7 +470,7 @@ export class World {
       const g = new THREE.ShapeGeometry(new THREE.Shape(pts.map((p) => new THREE.Vector2(p.x, p.y))));
       g.rotateX(-Math.PI / 2);
       g.translate(0, y, 0);
-      const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: col(color), roughness: 0.35, metalness: 0.0 }));
+      const m = new THREE.Mesh(g, alive(new THREE.MeshStandardMaterial({ color: col(color), roughness: 0.35, metalness: 0.0 }), { clouds: true, water: color === C.water }));
       m.receiveShadow = true;
       this.level.add(m);
     };
@@ -457,7 +498,7 @@ export class World {
       for (let k = 0; k < 16; k++) { const t = (k / 16) * Math.PI * 2; ring.push(w3(add(p, v2(Math.cos(t) * ROAD_W / 2, Math.sin(t) * ROAD_W / 2)), y)); }
       m.poly(ring, road, [0, 1, 0]);
     }
-    const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+    const mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }), { clouds: true }));
     mesh.receiveShadow = true;
     this.level.add(mesh);
   }
@@ -469,7 +510,7 @@ export class World {
     const style = new URLSearchParams(location.search).get("bg") === "suburb" ? "suburb" : "meadow";
     const near = new GB(), far = new GB();
     const town = outer.map((q) => add(q, mul(norm(sub(q, c)), 2.0)));
-    const clear = (p: V2, pad = 0) => !pointInPolygon(p, town) && !wet(p) && dist(p, c) > this.radius + 1.8 + pad;
+    const clear = (p: V2, pad = 0) => !pointInPolygon(p, town) && !wet(p) && dist(p, c) > this.radius + 1.8 + pad && !(this.outskirts?.covers(p) ?? false) && !(this.farmAt && dist(p, this.farmAt) < 7.5);
     const R = this.radius;
     const pick = (r: number) => (r < R + 14 ? near : far);
     const blob = (p: V2, rx: number, ry: number, rot: number, color: string, y: number, m: GB) => {
@@ -481,7 +522,9 @@ export class World {
       }
       m.poly(pts.map((q) => w3(q, y)), col(color), [0, 1, 0]);
     };
+    const smokeAt: { p: V2; h: number }[] = [];
     const house = (m: GB, p: V2, n: V2, w: number, d: number, h: number, wall: string, roof: string) => {
+      if (smokeAt.length < 7 && rng.chance(0.6)) smokeAt.push({ p, h: h + d * 0.42 + 0.1 });
       const ax = v2(n.y, -n.x);
       const F = [add(add(p, mul(ax, -w / 2)), mul(n, -d / 2)), add(add(p, mul(ax, w / 2)), mul(n, -d / 2)), add(add(p, mul(ax, w / 2)), mul(n, d / 2)), add(add(p, mul(ax, -w / 2)), mul(n, d / 2))];
       m.prism(F, 0, h, col(wall), null);
@@ -512,10 +555,29 @@ export class World {
         m.quad(w3(add(a, nn), 0.006), w3(add(b, nn), 0.006), w3(sub(b, nn), 0.006), w3(sub(a, nn), 0.006), col(C.road), [0, 1, 0]);
         m.poly(Array.from({ length: 10 }, (_, j) => w3(add(b, v2(Math.cos(j / 10 * 6.283) * 0.28, Math.sin(j / 10 * 6.283) * 0.28)), 0.006)), col(C.road), [0, 1, 0]);
       }
-      const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+      const mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }), { clouds: true }));
       mesh.receiveShadow = true;
       this.level.add(mesh);
     }
+    // the city around the neighborhood (not playable), thinning out into the countryside
+    const riverNear = (p: V2, d: number) => this.riverLines.some(([a, b]) => segDist(p, a, b) < d);
+    const laneNear = (p: V2, d: number) => lanes.some((l) => l.some((q) => dist(q, p) < d));
+    const ok = buildOutskirts(this.level, outer, c, this.seed, (p) => wet(p) || riverNear(p, 1.7) || laneNear(p, 0.9) || pointInPolygon(p, outer));
+    this.outskirts = ok;
+    const cottages: { p: V2; h: number }[] = [];
+    // a windmill and a little farm out in the meadow
+    for (let k = 0; k < 24; k++) {
+      const a = rng.range(0, Math.PI * 2), r = R + rng.range(15, 22);
+      const p = add(c, v2(Math.cos(a) * r, Math.sin(a) * r));
+      const face = norm(sub(c, p)), side = v2(-face.y, face.x);
+      const probe = [p, add(p, mul(side, -6)), add(p, mul(side, 6)), add(add(p, mul(side, -4)), mul(face, 3.5))];
+      if (probe.some((q) => !clear(q, 1) || laneNear(q, 1.5) || riverNear(q, 2) || this.downtownArea(q, c))) continue;
+      this.farm = new Farm(this.level, p, face, rng);
+      this.farmAt = p;
+      break;
+    }
+
+    this.lanes = lanes;
     const nearLane = (p: V2, d: number) => lanes.some((l) => l.some((q) => dist(q, p) < d));
 
     if (style === "meadow") {
@@ -570,8 +632,10 @@ export class World {
         }
       }
     }
+    void cottages;
+    this.smoke = new Smoke(this.level, smokeAt);
     for (const [m, shadow] of [[near, true], [far, false]] as const) {
-      const mesh = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
+      const mesh = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }), { wind: true, clouds: true, windows: true }));
       mesh.castShadow = shadow; mesh.receiveShadow = true;
       this.level.add(mesh);
     }
@@ -762,6 +826,7 @@ export class World {
       const inner = k === "park" ? b.innerPark : b.inner;
       return pointInPolygon(p, inner) ? TILE_TOP + 0.045 : TILE_TOP;
     }
+    if (this.outskirts?.onTile(p)) return TILE_TOP + 0.045;
     return 0.02;
   }
 
@@ -832,6 +897,9 @@ export class World {
   /** Glow on these blocks (open plots you can build on). */
   setGlow(blocks: number[]) {
     this.glowOn = new Set(blocks);
+    // while building, the city outside the neighborhood steps back and the district edge shows
+    MAT_OUTER.color.setScalar(blocks.length ? 0.68 : 1);
+    if (this.border) (this.border.material as THREE.MeshBasicMaterial).opacity = blocks.length ? 0.85 : 0.35;
     this.blocks.forEach((b, i) => { b.glow.visible = this.glowOn.has(i); });
     this.refreshHover();
   }
@@ -885,6 +953,25 @@ export class World {
     this.anims.push({ obj, start, dur, step, done });
   }
 
+  /** Wind, clouds, the light of the time of day, and the little lives around town. */
+  private living(t: number) {
+    U.uTime.value = t;
+    const clock = this.transit?.dayClock() ?? null;
+    const d = new URLSearchParams(location.search).get("tod");
+    const L = lightAt(d !== null ? Number(d) : clock ? clock.phase + clock.u : 1.7);
+    this.sun.color.copy(L.sun); this.sun.intensity = L.sunI;
+    this.hemi.color.copy(L.hemiSky); this.hemi.groundColor.copy(L.hemiGround); this.hemi.intensity = L.hemiI;
+    this.renderer.toneMappingExposure = L.exposure;
+    (this.scene.fog as THREE.Fog).color.copy(L.fog);
+    U.uNight.value = L.night; U.uCloud.value = 1 - L.night * 0.7; U.uSun.value = 1 - L.night;
+    const tg = this.sun.target.position, base = Math.atan2(12, -16) + L.az, R = 25;
+    this.sun.position.set(tg.x + Math.cos(base) * R * Math.cos(L.elev), R * Math.sin(L.elev) + 4, tg.z + Math.sin(base) * R * Math.cos(L.elev));
+    this.lamps?.update(L.night);
+    this.smoke?.update(t, this.camera.quaternion);
+    this.farm?.update(t);
+    this.birds?.update(t);
+  }
+
   private frameDt = 0.016;
   private lastT = 0;
   private frame() {
@@ -914,6 +1001,7 @@ export class World {
     this.transit?.update(t);
     this.metro?.update(t);
     this.air?.update(t, this.camera.position);
+    this.living(t);
     if (this.orbit) { this.cam.goal.az += this.orbit * this.frameDt; this.cam.cur.az += this.orbit * this.frameDt; }
     this.cam.update(this.frameDt);
     this.controls.target.copy(this.cam.cur.target);

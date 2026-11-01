@@ -5,6 +5,7 @@ import { GB, SHAPES, col, trs, w3 } from "./builder";
 import { add, dist, mul, norm, sub, v2, type V2 } from "./geom";
 import { C } from "./palette";
 import { Rng } from "./rng";
+import { alive } from "./ambient";
 import { BANK_LANE, BRIDGE_SPAN, BRIDGE_W, bridgeY, crossing } from "./transit";
 
 const WATER_W = 1.5, BANK = 0.75;
@@ -84,17 +85,20 @@ export function buildRiver(scene: THREE.Scene, pts: V2[], segs: { a: number; b: 
       const side = rng.chance(0.5) ? 1 : -1;
       const p = add(add(a, mul(d, s)), mul(n, side * (WATER_W / 2 + 0.15)));
       if (rng.chance(0.6)) for (let j = 0; j < 3; j++) {
+        deco.sway = 2; deco.swayBase = 0.02;
         const q = add(p, v2(rng.range(-0.05, 0.05), rng.range(-0.05, 0.05)));
         deco.geom(SHAPES.cyl, trs(q.x, 0.1, -q.y, 0.008, 0.18 + rng.range(0, 0.08), 0.008), col("#6AA84F"));
         deco.geom(SHAPES.cyl, trs(q.x, 0.21, -q.y, 0.016, 0.05, 0.016), col("#8A5A3B"));
-      } else deco.geom(SHAPES.ball, trs(p.x, 0.04, -p.y, 0.06, 0.035, 0.05, rng.range(0, 6)), col("#B8B3AA"));
+      } else { deco.sway = 0; deco.geom(SHAPES.ball, trs(p.x, 0.04, -p.y, 0.06, 0.035, 0.05, rng.range(0, 6)), col("#B8B3AA")); }
+      deco.sway = 0;
     }
   }
-  const water = new THREE.Mesh(m.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3 }));
+  const water = new THREE.Mesh(m.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3 }), { water: true, clouds: true }));
   water.receiveShadow = true;
-  const reeds = new THREE.Mesh(deco.build(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }));
+  const reeds = new THREE.Mesh(deco.build(), alive(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 }), { wind: true, clouds: true }));
   reeds.castShadow = true;
   scene.add(water, reeds);
+  return bent;
 }
 
 /** A cute arched stone bridge over segment a→b. `ghost`: a faint dashed outline (a site). */

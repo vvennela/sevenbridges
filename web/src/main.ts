@@ -450,6 +450,8 @@ function showLife(r: EvalReply | null) {
     const cars = pz.map.segments.map(() => 0);
     for (const x of rep0.streets) if (x.segment >= 0 && x.segment < cars.length) cars[x.segment] = x.cars;
     const top = Math.max(1, ...cars);
+    // no wash or cars on the river itself, except over a built bridge
+    pz.map.segments.forEach((sg, i) => { if (sg.terrain === "stream" && !(pz.bridgeSites ?? []).some((seg, k) => seg === i && st.bridges[k])) cars[i] = 0; });
     tl = cars.map((c) => (c > 0 ? 0.25 + 0.75 * (c / top) : 0));
     world.transit?.setTraffic(cars, true);
   } else {

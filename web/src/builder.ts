@@ -24,10 +24,15 @@ export class GB {
   pos: number[] = [];
   nor: number[] = [];
   colr: number[] = [];
+  /** Wind: while `sway` > 0, vertices get a sway weight that grows with height above `swayBase`. */
+  sway = 0;
+  swayBase = 0;
+  private sw: number[] = [];
 
   get empty() { return this.pos.length === 0; }
 
   private put(p: P3, n: P3, c: THREE.Color) {
+    this.sw.push(this.sway > 0 ? this.sway * Math.max(0, p[1] - this.swayBase) : 0);
     this.pos.push(p[0], p[1], p[2]);
     this.nor.push(n[0], n[1], n[2]);
     this.colr.push(c.r, c.g, c.b);
@@ -87,6 +92,7 @@ export class GB {
     g.setAttribute("position", new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute("normal", new THREE.Float32BufferAttribute(this.nor, 3));
     g.setAttribute("color", new THREE.Float32BufferAttribute(this.colr, 3));
+    g.setAttribute("sway", new THREE.Float32BufferAttribute(this.sw, 1));
     if (offset) g.translate(-offset[0], -offset[1], -offset[2]);
     g.computeBoundingSphere();
     return g;

@@ -123,7 +123,7 @@ export function trafficWash(segs: [V2, V2][], level: number[], width: number): T
     if (lv <= 0.05) return;
     const d = norm(sub(b, a)), n = v2(-d.y * width / 2, d.x * width / 2);
     const c = col(lv > 0.66 ? "#F28B6E" : lv > 0.33 ? "#F7B27A" : "#F9D79A");
-    const y = 0.035;
+    const y = 0.022; // above the road, below the river's banks and water
     m.quad(w3(add(a, n), y), w3(add(b, n), y), w3(sub(b, n), y), w3(sub(a, n), y), c, [0, 1, 0]);
   });
   if (m.empty) return null;

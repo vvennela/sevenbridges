@@ -24,7 +24,7 @@ export type IdleMode = "stroll" | "sit" | "wave" | "nap" | "groom" | "fight";
 interface Idler { c: V2; r: number; speed: number; phase: number; mode: IdleMode; ang: number; color: THREE.Color; coat: Coat; fit: Outfit; prop: Prop; fightEvery: number }
 type Prop = "cig" | "beer" | null;
 interface Bus { obj: THREE.Group; route: number; phase: number }
-interface DayPart { kind: "walk" | "car" | "ride"; pts: V2[]; L: number; speed: number; route?: number; board?: V2; alight?: V2; underFirst?: boolean }
+interface DayPart { kind: "walk" | "car" | "ride"; hidden?: boolean; pts: V2[]; L: number; speed: number; route?: number; board?: V2; alight?: V2; underFirst?: boolean }
 interface DayLeg { t0: number; parts: DayPart[]; ph: number }
 interface DayCat { id: number; legs: DayLeg[]; coat: Coat; fit: Outfit; accent: THREE.Color; carColor: THREE.Color }
 
@@ -441,18 +441,46 @@ export class Transit {
   }
 
   private traffic: { a: V2; b: V2; ph: number; color: THREE.Color; fur: THREE.Color }[] = [];
+  private ambientCars: { pts: V2[]; L: number; ph: number; loop: boolean; color: THREE.Color; fur: THREE.Color }[] = [];
+  /** Spots in the outer city where a few cats idle (looks only). */
+  ambientIdle: V2[] = [];
+  /** A few cars on the streets around town and on the lanes out to the country (looks only). */
+  setAmbientCars(paths: { pts: V2[]; loop: boolean }[]) {
+    const rng = new Rng(this.seed ^ 0xa3b);
+    this.ambientCars = [];
+    for (const p of paths) {
+      if (p.pts.length < 2) continue;
+      if (p.loop ? !rng.chance(0.35) : false) continue;
+      const L = polylineLength(p.pts);
+      const n = p.loop ? 1 : 2;
+      for (let k = 0; k < n; k++) this.ambientCars.push({ pts: p.pts, L, ph: rng.range(0, 40) + (k * L) / (n * 0.8), loop: p.loop, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
+    }
+  }
   /** Cars on busy streets: `level[seg]` 0..1 from Lean's traffic (up to 3 cars per street), or with
    * `exact`, Lean's own number of cars per street (report.streets). */
   setTraffic(level: number[] | null, exact = false) {
     this.traffic = [];
     if (!level) return;
     const rng = new Rng(this.seed ^ 0xca5);
-    level.forEach((lv, si) => {
+    // streets are made of many short segments: put cars on the busiest ones first, never on two
+    // segments that touch, so cars spread out instead of forming a queue along one street
+    const used = new Set<string>();
+    const key = (p: V2) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+    const order = level.map((lv, si) => ({ lv, si })).filter((x) => x.lv > 0.05).sort((x, y) => y.lv - x.lv);
+    for (const { lv, si } of order) {
       const ends = this.segEnds[si];
-      if (!ends || lv <= 0.05) return;
-      const n = exact ? Math.min(6, Math.round(lv)) : Math.max(1, Math.round(lv * 3));
-      for (let k = 0; k < n; k++) this.traffic.push({ a: ends[0], b: ends[1], ph: rng.range(0, 20) + k * 3.1, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
-    });
+      // never on the water: river segments carry cars only over a built bridge
+      if (!ends || !this.passable(si)) continue;
+      if (used.has(key(ends[0])) || used.has(key(ends[1]))) continue;
+      used.add(key(ends[0])); used.add(key(ends[1]));
+      const L = dist(ends[0], ends[1]);
+      // at most 3 cars on a long street, 1 on a short one, evenly spaced around its loop
+      const want = exact ? Math.max(1, Math.round(lv)) : Math.max(1, Math.round(lv * 3));
+      const n = Math.min(want, L > 3 ? 3 : L > 1.5 ? 2 : 1);
+      const L2 = (2 * L) / 0.9;
+      const ph0 = rng.range(0, L2);
+      for (let k = 0; k < n; k++) this.traffic.push({ a: ends[0], b: ends[1], ph: ph0 + (k * L2) / n, color: col(rng.pick(CAR_COLORS)), fur: rng.pick(COATS).fur });
+    }
   }
 
   // ---------- Lean's simulated day (report.cats) ----------
@@ -483,6 +511,7 @@ export class Transit {
     if (restart || !hadDay) this.dayStart = this.now;
     const rng = new Rng(this.seed ^ 0xda7);
     const P = Transit.DAY / 4;
+    const carGroups = new Map<string, number>();
     const phaseOf = (ph: string | number) => typeof ph === "number" ? ph : String(ph) === "morning" ? 0 : Math.max(0, Transit.PHASES.indexOf(String(ph)));
     const place = (x: number | string | null) => (typeof x === "number" ? x : null); // "downtown" is off the map
     for (const cat of cats.slice(0, 260)) {
@@ -501,7 +530,11 @@ export class Transit {
         ph = Math.max(ph, slot);
         slot = ph;
         const mode = String(lg.mode);
-        const t0 = ph * P + 0.4 + busy[ph] + rng.range(0, P * 0.3);
+        // cars: at most 2 drawn per trip (same from, to and time of day), leaving a few seconds apart,
+        // so they never pile up into a queue; the other drivers on that trip are hidden
+        let carIdx = -1;
+        if (mode === "car") { const key = `${lg.from}>${lg.to}:${ph}`; carIdx = carGroups.get(key) ?? 0; carGroups.set(key, carIdx + 1); }
+        const t0 = carIdx >= 0 ? ph * P + 0.4 + busy[ph] + (carIdx % 2) * 4 + rng.range(0, 1.5) : ph * P + 0.4 + busy[ph] + rng.range(0, P * 0.3);
         const from = place(lg.from), to = place(lg.to);
         const plan = this.dayLeg(from, to, mode, lg.route ?? (mode === "bus" && routeOf ? routeOf(from, to) : null), rng);
         if (!plan) continue;
@@ -509,7 +542,7 @@ export class Transit {
         const room = (ph + 1) * P - t0 - 0.3;
         const need = plan.parts.reduce((a, x) => a + (x.kind === "ride" ? 0 : x.L / x.speed), 0);
         const k = need > room * 0.7 ? need / (room * 0.7) : 1;
-        legs.push({ t0, parts: plan.parts.map((x) => ({ ...x, speed: x.speed * k })), ph });
+        legs.push({ t0, parts: plan.parts.map((x) => ({ ...x, speed: x.speed * k, hidden: carIdx >= 2 && x.kind === "car" })), ph });
         busy[ph] += need / k + 0.5;
       }
       const id = typeof cat.id === "number" ? cat.id : hashId(String(cat.id));
@@ -517,7 +550,15 @@ export class Transit {
     }
   }
 
+  /** Set when a street path can't be found without crossing unbridged water. */
+  private unreachable = false;
   private dayLeg(from: number | null, to: number | null, mode: string, route: number | null, rng: Rng): { parts: DayPart[] } | null {
+    this.unreachable = false;
+    const r = this.dayLegInner(from, to, mode, route, rng);
+    // a leg that would have to cross the river where there's no bridge isn't drawn (no driving on water)
+    return this.unreachable ? null : r;
+  }
+  private dayLegInner(from: number | null, to: number | null, mode: string, route: number | null, rng: Rng): { parts: DayPart[] } | null {
     const spot = (b: number | null, outward: boolean) => {
       if (this.validBlock(b)) return this.sidewalkSpot(b, rng);
       // outside town: the ring-road point toward downtown
@@ -616,7 +657,7 @@ export class Transit {
             const s = (t - tt) * part.speed;
             const at = along(part.pts, s);
             if (part.kind === "car") {
-              drawCar(add(at.at, mul(v2(-at.dir.y, at.dir.x), -0.1)), at.dir, Math.min(1, s / 0.3, (part.L - s) / 0.3), c.carColor, c.coat.fur);
+              if (!part.hidden) drawCar(add(at.at, mul(v2(-at.dir.y, at.dir.x), -0.1)), at.dir, Math.min(1, s / 0.3, (part.L - s) / 0.3), c.carColor, c.coat.fur);
             } else {
               const fade = Math.min(1, s / 0.25, (part.L - s) / 0.25);
               const pos = add(at.at, mul(v2(-at.dir.y, at.dir.x), ((c.id % 5) - 2) * 0.05));
@@ -671,6 +712,9 @@ export class Transit {
       } else expanded.push(it);
     }
     items = expanded;
+    // a few cats out in the city around town
+    const rngA = new Rng(this.seed ^ 0x51d);
+    for (const p of this.ambientIdle.slice(0, 24)) items.push({ p, mode: rngA.pick(["stroll", "wave", "stroll", "groom"] as IdleMode[]), ang: rngA.range(0, 6), group: rngA.int(0, 2) });
     this.idlers = items.slice(0, 180).map((it) => ({
       c: it.p, r: it.mode === "stroll" || it.kid ? rng.range(0.08, 0.18) : 0, speed: (it.kid ? rng.range(0.8, 1.3) : rng.range(0.25, 0.5)) * (rng.chance(0.5) ? 1 : -1),
       phase: rng.range(0, 7), mode: it.kid ? "wave" : it.mode, ang: it.ang, color: col(groupColor(it.group)), coat: rng.pick(COATS),
@@ -856,8 +900,9 @@ export class Transit {
         cur = [route.path[alight]];
       }
     }
+    this.unreachable = false;
     leg([at, ...this.nodePoints(this.streetPath(cur, endAt.nodes)), end], walk, true);
-    return legs;
+    return this.unreachable ? [] : legs;
   }
 
   /** A random spot on a block's sidewalk, and the two corners of that side. */
@@ -901,6 +946,7 @@ export class Transit {
     const { dist: d, prev } = this.dijkstra(from);
     let best = to[0];
     for (const k of to) if (d[k] < d[best]) best = k;
+    if (d[best] === Infinity) { this.unreachable = true; return []; }
     const p: number[] = [];
     for (let v = best; v >= 0; v = prev[v]) p.unshift(v);
     return p;
@@ -1014,6 +1060,16 @@ export class Transit {
       const pos = add(add(c.a, mul(d, s2)), mul(v2(-dir.y, dir.x), -0.1));
       const k = Math.min(1, s2 / 0.3, (L - s2) / 0.3);
       drawCar(pos, dir, Math.max(0.001, k), c.color, c.fur);
+    }
+    for (const c of this.ambientCars) {
+      const v = 0.8;
+      let s2: number, back = false;
+      if (c.loop) { const u = (((t * v + c.ph) % (2 * c.L)) + 2 * c.L) % (2 * c.L); back = u > c.L; s2 = back ? 2 * c.L - u : u; }
+      else { const u = (((t * v + c.ph) % (c.L + 6)) + c.L + 6) % (c.L + 6); if (u > c.L) continue; s2 = u; back = Math.floor((t * v + c.ph) / (c.L + 6)) % 2 === 1; if (back) s2 = c.L - u; }
+      const at = along(c.pts, s2);
+      const dir = back ? mul(at.dir, -1) : at.dir;
+      const k = Math.min(1, s2 / 0.4, (c.L - s2) / 0.4);
+      drawCar(add(at.at, mul(v2(-dir.y, dir.x), -0.1)), dir, Math.max(0.001, k), c.color, c.fur);
     }
     // Lean's simulated day
     if (this.day.length) this.drawDay(t, person, drawCar, walkPose);
