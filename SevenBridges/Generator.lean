@@ -209,13 +209,10 @@ def allOfficeHeights : List Building :=
 def riverSegments (m : RoadMap) : List Nat :=
   (List.range m.segments.length).filter fun i => (m.segments.getD i default).terrain == .stream
 
-/-- Bridge sites: every river segment some route drives along (so every route
-can run), then random others up to `most` sites in all. Never more than 7. -/
-def chooseBridgeSites (r : Rng) (m : RoadMap) (routes : List Route) (most : Nat) : List Nat × Rng :=
-  let river := riverSegments m
-  let used := river.filter fun i => routes.any fun rt => rt.sides.contains (m.segments.getD i default).side
-  let (others, r) := r.choose (river.filter (· ∉ used)) (most - min most used.length)
-  ((used ++ others).take 7 |>.mergeSort (· ≤ ·), r)
+/-- Bridge sites: every river crossing (up to 7). Where to bridge is the
+player's decision; the generator doesn't pre-pick. -/
+def chooseBridgeSites (r : Rng) (m : RoadMap) (_routes : List Route) (_most : Nat) : List Nat × Rng :=
+  ((riverSegments m).take 7 |>.mergeSort (· ≤ ·), r)
 
 /-- A random level on a map (budget not set yet): random groups, allowed
 buildings, bridge sites, metro line and simulation seed. No block is
