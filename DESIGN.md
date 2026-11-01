@@ -137,9 +137,9 @@ unhappy (see "quiet" in §5). That's why neither "all 3-story" nor
 
 - **Allowed buildings.** Each puzzle allows about 6 of the 12 catalog
   choices, for example "no bars, and offices up to 2 stories."
-- **Already-built blocks.** 0–3 blocks come fixed, for example an old church
-  or a school. The player can't change them, but they still count for
-  neighbors, trips and happiness.
+- **No already-built blocks.** Generated levels start with every block open
+  (`Generator.generate_no_fixed`). The rules still allow fixed blocks
+  (`Puzzle.fixed`); only the Old Harbor test fixture uses them.
 
 These limits make puzzles more varied, and they are the cheapest way to keep
 the solver fast (§8.4).
@@ -650,3 +650,71 @@ Proofs about the process:
 - every rider who gets on gets off at their stop,
 - riders = boardings = alightings,
 - the riders who get on plus those left behind = everyone who waited.
+
+---
+
+## 15. Version 2 (decided 2026-11-01)
+
+### 15.1 Player experience
+
+- **Title screen**: "Seven Bridges", buttons **Start** and **The rules**.
+- **The rules**, as few bullets as possible:
+  - Build on every block: homes, offices, shops, food, parks, bars.
+  - Neighbors matter: what's next door decides how happy and how productive each block is.
+  - Connect the town: roads, bridges, buses, a metro to downtown. Cars work too, but bring traffic and pollution.
+  - Stay within budget.
+  - Your rating is out of 100. 100 is the best possible plan, proven by Lean for this town's cats.
+- **Every level is a new random map** (easy 5, medium 7, hard 9 blocks). No starting blocks.
+- **Verified before you start**: a level opens only after Lean has proven its best plan.
+  The title card shows the level's seed: "Town #N, simulation #N, best plan proven ✓".
+- **Two numbers matter**: happiness (homes) and productivity (jobs). The score adds them.
+  The trade-off is the game: offices next to homes help commutes but hurt quiet and air.
+
+### 15.2 The cats: a seeded simulation, proven per level
+
+- Each level has a **simulation seed**. From it, every resident cat gets its own traits:
+  group, personality, how it gets around (walker, bus rider, driver), and its day
+  (works, studies, retired; eats out or not; goes out at night or not).
+- **One simulated day**, step by step and the same every time for that seed:
+  morning commute, lunch, evening out, back home.
+- Each cat picks places it can reach: next door, one bus ride away, by metro, or by car.
+  Drivers who find no job nearby drive downtown.
+- The day produces: who works where (productivity), who eats and drinks where, car trips
+  (traffic and pollution), bus and metro riders (with the rush-hour process), and each
+  cat's happiness.
+- **The score is a function of the layout and the seed**, so `solve_is_best` proves the best
+  plan for exactly this simulation. Different levels have different simulations.
+- **Proven about the simulation**: every cat ends the day at home; each cat is counted once;
+  buses never exceed capacity (already proven); boarded + left behind = waited (already proven).
+- The animation plays exactly the day Lean simulated (`report.cats`), so what you see is what
+  was scored.
+
+### 15.3 Rules (still local, so the solver stays fast)
+
+| Building | Effect |
+|---|---|
+| Home (1–3 floors) | happiness from what's next door, each cat by its own tastes |
+| Office (1–5 floors) | jobs filled by cats who can reach it; bonus next to offices and food |
+| Shop (1–2 floors) | sales to cats who can reach it |
+| Food (café/restaurant) | lunch for workers nearby (office bonus), dinner for residents; some cats love it |
+| Park | happiness for neighbors; cleans the air next to it |
+| Bar | nightlife: some love it, some hate the noise |
+
+- **Cars**: a cat drives when walking, bus and metro don't reach its destination. Each car
+  trip adds traffic and pollution to its home block and its neighbors. Traffic hurts quiet;
+  pollution hurts everyone's happiness; parks next door reduce it.
+- **Metro line to downtown**: a line enters from one edge of the map; pick one station block
+  among the blocks along it, or none. Cats in reach can commute to downtown jobs; downtown
+  workers can reach your offices (capped). Transit lovers love living by it; it's noisy next door.
+  Needs a minimum number of riders.
+- **Buses and bridges** as now. Budget as now.
+- **Groups pool**: families, students, professionals, the elderly, artists, urbanites, rural
+  newcomers. Each level picks 2–3.
+
+### 15.4 Look
+
+- Taller offices (up to 5 floors) and a downtown skyline of tall towers in the distance,
+  where the metro line comes from.
+- Every block arranges its buildings differently (seeded layout templates and rotations).
+- Food places: cafés with terraces, a small restaurant with a sign.
+- Cars driving on streets, haze over polluted blocks, cleaner air near parks.

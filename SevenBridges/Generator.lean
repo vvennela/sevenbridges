@@ -260,10 +260,11 @@ structure Result where
 
 /-- A random puzzle with its budget set from a random planted layout. -/
 def attemptPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) : Puzzle × Rng :=
-  let (p, r) := randomPuzzle r m routes name
-  let (planted, r) := randomSolution r p
-  let (margin, r) := r.below 6
-  ({ p with budget := costOf p planted + 10 * margin }, r)
+  let pr := randomPuzzle r m routes name
+  let sr := randomSolution pr.2 pr.1
+  let mr := sr.2.below 6
+  -- No block is already built.
+  ({ pr.1 with fixed := [], budget := costOf pr.1 sr.1 + 10 * mr.1 }, mr.2)
 
 /-- Try up to `fuel` more attempts, with `left` steps of work left. Each attempt
 makes a puzzle with `attempt`. -/
@@ -323,6 +324,38 @@ theorem generate_work_le (m : RoadMap) (routes : List Route) (name : String) (se
     (generate m routes name seed).work ≤ generatorStepBudget := by
   have := loop_work_le (attemptPuzzle · m routes name) maxAttempts ⟨seed⟩ generatorStepBudget 0 0
   simpa [generate] using this
+
+/-! ## Generated levels have no starting blocks -/
+
+/-- Every puzzle the loop returns was made by `attempt`. -/
+theorem loop_puzzle_made (attempt : Rng → Puzzle × Rng) :
+    ∀ (fuel : Nat) (r : Rng) (left attempts work : Nat) (q : Puzzle),
+      (loop attempt fuel r left attempts work).puzzle = some q → ∃ r', (attempt r').1 = q := by
+  intro fuel
+  induction fuel with
+  | zero => intro r left attempts work q h; simp [loop] at h
+  | succ fuel ih =>
+    intro r left attempts work q h
+    simp only [loop] at h
+    generalize hx : attempt r = x at h
+    obtain ⟨p, r'⟩ := x
+    simp only at h
+    split at h
+    · simp at h
+    · split at h
+      · split at h
+        · simp only [Option.some.injEq] at h
+          exact ⟨r, by rw [hx]; exact h⟩
+        · exact ih _ _ _ _ q h
+      · exact ih _ _ _ _ q h
+
+/-- **Generated levels have no starting blocks**: every block of a generated
+puzzle is open. -/
+theorem generate_no_fixed (m : RoadMap) (routes : List Route) (name : String) (seed : Nat)
+    (q : Puzzle) (h : (generate m routes name seed).puzzle = some q) : q.fixed = [] := by
+  obtain ⟨r, hr⟩ := loop_puzzle_made _ _ _ _ _ _ q h
+  rw [← hr]
+  rfl
 
 end Generator
 end SevenBridges
