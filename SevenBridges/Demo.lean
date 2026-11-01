@@ -1,5 +1,6 @@
 import SevenBridges.Demo.Map
 import SevenBridges.Solver
+import SevenBridges.Rules.Report
 
 /-!
 # A hand-made demo puzzle, with tests (DESIGN.md §8.3)
@@ -7,7 +8,8 @@ import SevenBridges.Solver
 
 namespace SevenBridges.Demo
 
-/-- "Old Harbor": 7 blocks, two of them already built. A river cuts blocks 0
+/-- "Old Harbor", a test fixture (players never see it): 7 blocks, two of them
+already built. A river cuts blocks 0
 and 4 off from the rest; bridges can be built at three places. -/
 def oldHarbor : Puzzle where
   name := "Old Harbor"
@@ -16,7 +18,7 @@ def oldHarbor : Puzzle where
               .office .one, .office .two, .shop .one, .park, .bar]
   fixed := [none, none, none, some (.office .two), none, none, some .park]
   routes := demoRoutes
-  stationSites := [0, 1, 2, 3, 4, 5, 6]
+  metroSites := [0, 1, 2]
   bridgeSites := demoBridgeSites
   groups := [
     { name := "Families", share := 60, types := [
@@ -26,6 +28,7 @@ def oldHarbor : Puzzle where
         { name := "Students", share := 70, cares := [.nightlife, .transit], hates := [] },
         { name := "Drivers", share := 30, cares := [.nightlife], hates := [.transit] }] }]
   budget := 900
+  simSeed := 7
 
 -- The map passes every map check.
 #guard demoMap.problems == []
@@ -83,7 +86,7 @@ def notAllowed : Solution := { sampleLayout with build := sampleLayout.build.set
 def changedFixed : Solution := { sampleLayout with build := sampleLayout.build.set 6 .bar }
 #guard !decide (Valid oldHarbor changedFixed)
 
--- A station next to nothing: no jobs, shops or bars in reach, so no riders.
+-- A metro station next to nothing: no jobs, shops or bars in reach, so no riders.
 def lonelyStation : Solution := { emptyLayout oldHarbor with station := some 1 }
 #guard !decide (Valid oldHarbor lonelyStation)
 #guard (report oldHarbor lonelyStation).stationRiders < Numbers.minStationRiders

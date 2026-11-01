@@ -1,6 +1,7 @@
 import Lean.Data.Json
 import Lean.Elab.Deriving.FromToJson
 import SevenBridges.Solver
+import SevenBridges.Rules.Report
 
 /-!
 # JSON for talking to the frontend (DESIGN.md §9)
@@ -30,12 +31,28 @@ instance : ToJson Group where
       ("hates", toJson usual.hates), ("types", toJson g.types)]
 deriving instance ToJson, FromJson for Route
 deriving instance ToJson, FromJson for Mode
+deriving instance ToJson, FromJson for Phase
+deriving instance ToJson, FromJson for Mobility
+deriving instance ToJson, FromJson for DayKind
+
+/-- A place: a block number, or `"downtown"`. -/
+instance : ToJson Place where
+  toJson
+    | .block j => toJson j
+    | .downtown => "downtown"
+
+/-- A trip of a cat: `{"from": 3, "to": "downtown", "mode": "metro", "phase": "commute"}`. -/
+instance : ToJson Leg where
+  toJson l := Json.mkObj [("from", toJson l.start), ("to", toJson l.stop), ("mode", toJson l.mode),
+    ("phase", toJson l.phase)]
+deriving instance ToJson for CatReport
 
 def Building.kindName : Building → String
   | .empty => "empty"
   | .housing _ => "housing"
   | .office _ => "office"
   | .shop _ => "shop"
+  | .food => "food"
   | .park => "park"
   | .bar => "bar"
 
@@ -46,7 +63,9 @@ def heightOf : Nat → Except String Height
   | 1 => .ok .one
   | 2 => .ok .two
   | 3 => .ok .three
-  | n => .error s!"stories must be 1, 2 or 3, not {n}"
+  | 4 => .ok .four
+  | 5 => .ok .five
+  | n => .error s!"stories must be 1 to 5, not {n}"
 
 instance : FromJson Building where
   fromJson? j := do
@@ -57,6 +76,7 @@ instance : FromJson Building where
     | "housing" => return .housing (← heightOf stories)
     | "office" => return .office (← heightOf stories)
     | "shop" => return .shop (← heightOf stories)
+    | "food" => pure .food
     | "park" => pure .park
     | "bar" => pure .bar
     | k => throw s!"unknown building kind {k}"

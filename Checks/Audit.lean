@@ -44,4 +44,9 @@ elab "#spec_surface " id:ident : command => do
 #audit_axioms SevenBridges.routeRush_maxLoad_le
 #audit_axioms SevenBridges.routeRush_all_off
 #audit_axioms SevenBridges.routeRush_boarded_add_leftBehind
+#audit_axioms SevenBridges.legs_return_home
+#audit_axioms SevenBridges.simulate_cats
+#audit_axioms SevenBridges.population_nodup
+#audit_axioms SevenBridges.cats_conserved
+#audit_axioms SevenBridges.night_at_home
 #spec_surface SevenBridges.solve_is_best

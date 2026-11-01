@@ -2,10 +2,15 @@ import SevenBridges.Rules.Map
 import SevenBridges.Rules.Buildings
 import SevenBridges.Rules.Culture
 import SevenBridges.Rules.Puzzle
-import SevenBridges.Rules.Score
+import SevenBridges.Rules.Cats
+import SevenBridges.Rules.Context
+import SevenBridges.Rules.Day
 import SevenBridges.Rules.Bus
+import SevenBridges.Rules.Score
 import SevenBridges.Rules.Valid
+import SevenBridges.Rules.Report
 import SevenBridges.BusProofs
+import SevenBridges.DayProofs
 import SevenBridges.Solver
 import SevenBridges.Proofs
 import SevenBridges.Demo

@@ -112,7 +112,7 @@ def NodeOk (p : Puzzle) (P : Plan) (exacts : List Plan) (opts : List (List Build
 theorem puzzle_of_ok {p : Puzzle} {P : Plan} (h : P.Ok p) : P.c.puzzle = p := by rw [h.2]; rfl
 
 theorem tryNode_spec (p : Puzzle) (keep : Solution → Bool) (P : Plan) (hP : P.Ok p)
-    (opts : List (List Building)) (vals : List (List (Int × Nat))) (hvals : vals = P.optionValues opts)
+    (opts : List (List Building)) (vals : Caps) (hvals : vals = P.optionValues opts)
     (go : Search → Search)
     (hgo : ∀ st, st.Later p (go st) ∧ (go st).Covered p keep (FitsNode P opts)) (st : Search) :
     st.Later p (st.tryNode P opts vals go) ∧ (st.tryNode P opts vals go).Covered p keep (FitsNode P opts) := by
@@ -140,16 +140,11 @@ theorem tryNode_spec (p : Puzzle) (keep : Solution → Bool) (P : Plan) (hP : P.
         rw [← hub] at this
         exact Int.le_trans this hle
       · split
-        · rename_i hpass
+        · rename_i hle
           refine ⟨h1, fun _ t hv _ hfit => ?_⟩
-          have := mayPass_of_valid p P hP.2 opts t hv hfit
-          simp [this] at hpass
-        · split
-          · rename_i hle
-            refine ⟨h1, fun _ t hv _ hfit => ?_⟩
-            rw [hkn] at hle
-            exact Int.le_trans (score_le_knapsackBound p P hP.1 hP.2 opts t hv hfit) hle
-          · exact ⟨Search.Later.trans h1 (hgo _).1, (hgo _).2⟩
+          rw [hkn] at hle
+          exact Int.le_trans (score_le_knapsackBound p P hP.1 hP.2 opts t hv hfit) hle
+        · exact ⟨Search.Later.trans h1 (hgo _).1, (hgo _).2⟩
 
 /-! ## Leaves: trying each transit choice -/
 
@@ -393,17 +388,17 @@ theorem rootJobs_spec (p : Puzzle) :
   · intro j hj
     simp only [rootJobs, List.mem_map] at hj
     obtain ⟨Ts, _, rfl⟩ := hj
-    refine ⟨⟨makePlan_sound _ _ _ rfl, rfl⟩, ?_, ?_, by simp [Puzzle.choices, Puzzle.blockCount]⟩
+    refine ⟨⟨makePlan_sound _ _ _ _ rfl rfl, rfl⟩, ?_, ?_, by simp [Puzzle.choices, Puzzle.blockCount]⟩
     · intro P' hP'
       obtain ⟨T, hT, rfl⟩ := List.mem_map.1 hP'
-      exact ⟨⟨makePlan_sound _ _ _ rfl, rfl⟩, T, hT, rfl⟩
+      exact ⟨⟨makePlan_sound _ _ _ _ rfl rfl, rfl⟩, T, hT, rfl⟩
     · intro T hT
       exact ⟨_, List.mem_map.2 ⟨T, hT, rfl⟩, rfl⟩
   · intro t hv
     have hfp : FitsPuzzle p t := hv.1
     obtain ⟨hlen, hpick, hroutes, hstation, hbridges⟩ := hfp
     let Ts : List Transit :=
-      (none :: p.stationSites.map some).map fun station => ⟨t.routesOn, station, t.bridges⟩
+      (none :: p.metroSites.map some).map fun station => ⟨t.routesOn, station, t.bridges⟩
     refine ⟨_, List.mem_map.2 ⟨Ts, ?_, rfl⟩, ?_, ?_⟩
     · refine List.mem_map.2 ⟨(t.routesOn, t.bridges), List.mem_filter.2 ⟨?_, ?_⟩, rfl⟩
       · exact List.mem_flatMap.2 ⟨t.routesOn, (mem_allSwitches _ _).2 hroutes,
@@ -656,11 +651,18 @@ namespace SevenBridges
 
 /-! ## The rating out of 100 -/
 
+theorem rating_eq (p : Puzzle) (bestScore : Int) (s : Solution) :
+    rating p bestScore s = if Valid p s then
+      (let base := score p (emptyLayout p)
+       if base < bestScore then ((score p s - base) * 100 / (bestScore - base)).toNat
+       else if bestScore ≤ score p s then 100 else 0)
+    else 0 := rfl
+
 /-- **No layout rates above 100**, when rated against the solver's best. -/
 theorem rating_le_100 (p : Puzzle) (b : Solution) (hb : solve p = some b) (s : Solution) :
     rating p (score p b) s ≤ 100 := by
   have hbest := solve_is_best p b hb
-  unfold rating
+  rw [rating_eq]
   split
   · rename_i hv
     have hle := hbest.2 s hv
@@ -682,7 +684,7 @@ theorem rating_eq_100_iff (p : Puzzle) (b : Solution) (hb : solve p = some b) (s
     (hs : Valid p s) : rating p (score p b) s = 100 ↔ score p s = score p b := by
   have hle := (solve_is_best p b hb).2 s hs
   have hempty := (solve_is_best p b hb).2 _ (empty_valid p)
-  unfold rating
+  rw [rating_eq]
   simp only [hs, ite_true]
   split
   · rename_i hpos

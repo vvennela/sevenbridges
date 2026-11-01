@@ -48,17 +48,18 @@ def tryTransits (exacts : List Plan) (keep : Solution → Bool) (build : List Bu
       else st.consider P.c keep ⟨build, T.on, T.station, T.bridges⟩
     | _ => { st with fuel := 0 }) st
 
-/-- The kind of a building: empty, park, bar, housing, office or shop. -/
+/-- The kind of a building: empty, park, bar, food, housing, office or shop. -/
 def kindOf : Building → Nat
   | .empty => 0
   | .park => 1
   | .bar => 2
-  | .housing _ => 3
-  | .office _ => 4
-  | .shop _ => 5
+  | .food => 3
+  | .housing _ => 4
+  | .office _ => 5
+  | .shop _ => 6
 
-/-- Whether a building is 3 stories tall. -/
-def loudKey (b : Building) : Nat := if b.stories = 3 then 1 else 0
+/-- Whether a building has 3 floors or more. -/
+def loudKey (b : Building) : Nat := if b.stories ≥ 3 then 1 else 0
 
 /-- How one search step splits a block's options. -/
 inductive Split
@@ -81,16 +82,14 @@ inductive Step
   | transit
 
 /-- Visit one search node (plan `P`, options `opts`, caps and costs `vals`): take
-a step, then skip the node if its cheapest layout is over budget, its bound
-can't beat the best so far, or the station can't get enough riders;
-otherwise search below it with `go`. -/
-def Search.tryNode (P : Plan) (opts : List (List Building)) (vals : List (List (Int × Nat)))
+a step, then skip the node if its cheapest layout is over budget or its bound
+can't beat the best so far; otherwise search below it with `go`. -/
+def Search.tryNode (P : Plan) (opts : List (List Building)) (vals : Caps)
     (go : Search → Search) (st : Search) : Search :=
   if st.fuel = 0 then st else
   let st := st.spend
   if leastBuildCost P.c.puzzle opts + P.L.leastCost > P.c.puzzle.budget then st
   else if P.boundFrom vals ≤ st.bestScore then st
-  else if !P.mayPass opts then st
   else if P.knapsackFrom vals ≤ st.bestScore then st
   else go st
 
@@ -129,14 +128,14 @@ def transitGroups (c : Context) : List (List Transit) :=
   (((allSwitches p.routes.length).flatMap fun on =>
       (allSwitches p.bridgeSites.length).map fun br => (on, br)).filter
     fun x => bridgesReadyFor c x.1 x.2).map fun x =>
-    (none :: p.stationSites.map some).map fun station => ⟨x.1, station, x.2⟩
+    (none :: p.metroSites.map some).map fun station => ⟨x.1, station, x.2⟩
 
 /-- The search steps: first the kind of every block, then the transit, then
-whether each block is 3 stories, then the building on each block. -/
+whether each block has 3 floors or more, then the building on each block. -/
 def searchSteps (p : Puzzle) : List Step :=
   let blocks := List.range p.blockCount
   blocks.map (Step.block · (.byKey (fun b => if b.isHousing then 1 else 0) 2))
-    ++ blocks.map (Step.block · (.byKey kindOf 6)) ++ [.transit]
+    ++ blocks.map (Step.block · (.byKey kindOf 7)) ++ [.transit]
     ++ blocks.map (Step.block · (.byKey loudKey 2)) ++ blocks.map (Step.block · .single)
 
 /-- A piece of the search: a plan (with one plan per transit choice in
@@ -163,8 +162,9 @@ def Job.expand (j : Job) : List Job :=
 def rootJobs (p : Puzzle) : List Job :=
   let c := prepare p
   let moods := moodTables c
+  let tables := makeTables c
   (transitGroups c).map fun Ts =>
-    { P := makePlan c moods Ts, exacts := Ts.map (makePlan c moods [·]), steps := searchSteps p,
+    { P := makePlan c moods tables Ts, exacts := Ts.map (makePlan c moods tables [·]), steps := searchSteps p,
       opts := p.choices }
 
 /-- Split every piece at its first step, `n` times over. -/
@@ -220,33 +220,6 @@ def combineHands (start : Search) (share : Nat) (results : List Search) : Search
 Each core works on its own copy of the puzzle's buildings. Sharing them between
 threads makes every core wait on the same memory. The copy equals the original
 (`Puzzle.fresh_eq`); it only changes where the data lives. -/
-
-/-- A number for each building (for copying). -/
-@[noinline] def Building.code : Building → Nat
-  | .empty => 0
-  | .park => 1
-  | .bar => 2
-  | .housing h => 3 + h.stories
-  | .office h => 6 + h.stories
-  | .shop h => 9 + h.stories
-
-/-- The building with a number (for copying). -/
-@[noinline] def Building.ofCode : Nat → Building
-  | 1 => .park
-  | 2 => .bar
-  | 4 => .housing .one
-  | 5 => .housing .two
-  | 6 => .housing .three
-  | 7 => .office .one
-  | 8 => .office .two
-  | 9 => .office .three
-  | 10 => .shop .one
-  | 11 => .shop .two
-  | 12 => .shop .three
-  | _ => .empty
-
-theorem Building.ofCode_code (b : Building) : Building.ofCode b.code = b := by
-  cases b <;> (try rename_i h; cases h) <;> rfl
 
 /-- The puzzle itself; the extra argument makes each task make its own copy. -/
 @[noinline] def Puzzle.withUnit (_ : Unit) (p : Puzzle) : Puzzle := p
@@ -317,13 +290,31 @@ def improveOnce (c : Context) (sv : Solution × Int) : Solution × Int :=
   let sv := (List.range p.routes.length).foldl (fun sv i =>
     tryLayout c sv { sv.1 with routesOn := sv.1.routesOn.set i true,
                                bridges := (c.bridgesFor i).foldl (fun b k => b.set k true) sv.1.bridges }) sv
-  (none :: p.stationSites.map some).foldl (fun sv k => tryLayout c sv { sv.1 with station := k }) sv
+  (none :: p.metroSites.map some).foldl (fun sv k => tryLayout c sv { sv.1 with station := k }) sv
 
-/-- A quick first guess: start empty and make the best small change, a few
-rounds. Only a starting point for the search; it doesn't need to be the best. -/
+/-- Empty blocks from the last one back until the layout fits the budget. -/
+def trimToBudget (p : Puzzle) (s : Solution) : Solution :=
+  (List.range p.blockCount).reverse.foldl (fun s i =>
+    if costOf p s ≤ p.budget || (p.fixedAt i).isSome then s
+    else { s with build := s.build.set i .empty }) s
+
+/-- Layouts to start the first guess from: the empty one, and each allowed
+building on every open block (cut down to the budget). -/
+def startingLayouts (p : Puzzle) : List Solution :=
+  let e := emptyLayout p
+  e :: (p.allowed.filter (· != .empty)).map fun b =>
+    trimToBudget p { e with build := (List.range p.blockCount).map fun i => (p.fixedAt i).getD b }
+
+/-- A quick first guess: from each starting layout, make the best small change,
+a few rounds; keep the best result. Only a starting point for the search; it
+doesn't need to be the best. -/
 def firstGuess (c : Context) : Solution :=
   let start := emptyLayout c.puzzle
-  ((List.range 6).foldl (fun sv _ => improveOnce c sv) (start, scoreWith c start)).1
+  let climb (s : Solution) : Solution × Int :=
+    let sv := if decide (ValidWith c s) then (s, scoreWith c s) else (start, scoreWith c start)
+    (List.range 4).foldl (fun sv _ => improveOnce c sv) sv
+  ((startingLayouts c.puzzle).map climb).foldl (fun best sv => if sv.2 > best.2 then sv else best)
+    (start, scoreWith c start) |>.1
 
 /-- The starting state: the first guess if it is valid, else the empty layout. -/
 def startSearch (p : Puzzle) (fuel : Nat) : Search :=

@@ -26,7 +26,7 @@ def allSwitches : Nat → List (List Bool)
 def candidates (p : Puzzle) : List Solution :=
   (allPicks p.choices).flatMap fun build =>
     (allSwitches p.routes.length).flatMap fun routesOn =>
-      (none :: p.stationSites.map some).flatMap fun station =>
+      (none :: p.metroSites.map some).flatMap fun station =>
         (allSwitches p.bridgeSites.length).map fun bridges =>
           { build, routesOn, station, bridges }
 
@@ -37,7 +37,7 @@ def productOfLengths {α : Type} : List (List α) → Nat
 
 /-- How many candidates there are, without listing them. -/
 def candidateCount (p : Puzzle) : Nat :=
-  productOfLengths p.choices * 2 ^ p.routes.length * (p.stationSites.length + 1)
+  productOfLengths p.choices * 2 ^ p.routes.length * (p.metroSites.length + 1)
     * 2 ^ p.bridgeSites.length
 
 /-- The first item with the highest value of `f`, or `none` for an empty list. -/

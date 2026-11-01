@@ -334,21 +334,21 @@ end Rush
 
 /-- **A bus never carries more than `busCapacity`**, on any route, in either
 direction, in any layout. -/
-theorem routeRush_maxLoad_le (c : Context) (T : Transit) (look : Nat → Building) (r dir : Nat) :
-    ∀ x ∈ (routeRush c T look r dir).maxLoads, x ≤ Numbers.busCapacity :=
+theorem routeRush_maxLoad_le (c : Context) (T : Transit) (d : List CatDay) (look : Nat → Building) (r dir : Nat) :
+    ∀ x ∈ (routeRush c T d look r dir).maxLoads, x ≤ Numbers.busCapacity :=
   Rush.run_maxLoad_le _ _ _ _
 
 /-- **Every rider who gets on gets off**: after the rush the buses are empty,
 and boardings equal alightings. -/
-theorem routeRush_all_off (c : Context) (T : Transit) (look : Nat → Building) (r dir : Nat) :
-    (routeRush c T look r dir).load = 0
-    ∧ (routeRush c T look r dir).alighted = (routeRush c T look r dir).boarded :=
+theorem routeRush_all_off (c : Context) (T : Transit) (d : List CatDay) (look : Nat → Building) (r dir : Nat) :
+    (routeRush c T d look r dir).load = 0
+    ∧ (routeRush c T d look r dir).alighted = (routeRush c T d look r dir).boarded :=
   Rush.run_all_off _ _ _ _
 
 /-- **Riders who got on plus riders left behind is everyone who waited.** -/
-theorem routeRush_boarded_add_leftBehind (c : Context) (T : Transit) (look : Nat → Building) (r dir : Nat) :
-    (routeRush c T look r dir).boarded + (routeRush c T look r dir).leftBehind
-      = ((rushParties c T look r dir).map (·.people)).sum :=
+theorem routeRush_boarded_add_leftBehind (c : Context) (T : Transit) (d : List CatDay) (look : Nat → Building) (r dir : Nat) :
+    (routeRush c T d look r dir).boarded + (routeRush c T d look r dir).leftBehind
+      = ((rushParties c T d look r dir).map (·.people)).sum :=
   Rush.run_boarded_add_leftBehind _ _ _ _ (by decide)
 
 end SevenBridges

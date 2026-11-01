@@ -1,5 +1,5 @@
 /-!
-# Residents and culture (DESIGN.md §5)
+# Residents and culture (DESIGN.md §5, §15.2)
 -/
 
 namespace SevenBridges
@@ -10,20 +10,25 @@ inductive Factor
   | parks
   /-- A bar is next to their block. -/
   | nightlife
-  /-- No 3-story building and no bar is next to their block. -/
+  /-- Nothing loud next to their block (a building of 3 or more floors, or a
+  bar), no car traffic, and no metro station on or next to it. -/
   | quiet
-  /-- A bus route stops at their block, or the subway station is on or next to it. -/
+  /-- A bus route stops at their block, or the metro station is on or next to it. -/
   | transit
   /-- A shop is next to their block. -/
   | shops
   /-- At least 3 different kinds of building (housing, office, shop, park,
-  bar) are next to their block. -/
+  bar, food) are next to their block. -/
   | variety
+  /-- A café or restaurant is next to their block. -/
+  | food
+  /-- No car traffic on their block, or a park next to it to clean the air. -/
+  | cleanAir
 deriving Repr, DecidableEq, Inhabited
 
 /-- Every factor, in a fixed order. -/
 def Factor.all : List Factor :=
-  [.parks, .nightlife, .quiet, .transit, .shops, .variety]
+  [.parks, .nightlife, .quiet, .transit, .shops, .variety, .food, .cleanAir]
 
 /-- How a group feels about a factor. -/
 inductive Feeling
@@ -35,7 +40,7 @@ deriving Repr, DecidableEq, Inhabited
 /-- Happiness each resident gets from a factor they have. -/
 def Feeling.value : Feeling → Int
   | .cares => 2
-  | .neutral => 1
+  | .neutral => 0
   | .hates => -1
 
 /-- A personality type within a group: what these residents care about and
@@ -47,13 +52,24 @@ structure Personality where
   hates : List Factor
 deriving Repr, DecidableEq, Inhabited
 
-/-- A group of residents. `share` is the percent of each housing block's
-residents who belong to this group. `types` are its personality types; the
-first one is the usual one, and most of the group has it. -/
+/-- A group of residents. `share` is the percent of the town's cats who belong
+to this group. `types` are its personality types; the first one is the usual
+one, and most of the group has it.
+
+The other numbers say how the group's cats spend their day, in percent: how
+many work and how many study (the rest are retired), how many drive and how
+many ride the bus (the rest walk), and how many eat out at lunch and go out in
+the evening. -/
 structure Group where
   name : String
   share : Nat
   types : List Personality
+  works : Nat := 60
+  studies : Nat := 10
+  drives : Nat := 30
+  buses : Nat := 30
+  eatsOut : Nat := 40
+  goesOut : Nat := 30
 deriving Repr, DecidableEq, Inhabited
 
 /-- How residents with this personality feel about a factor. "Cares" wins if a
@@ -69,6 +85,8 @@ def Factor.words : Factor → String
   | .transit => "transit"
   | .shops => "shops nearby"
   | .variety => "a mix of buildings nearby"
+  | .food => "cafés and restaurants"
+  | .cleanAir => "clean air"
 
 private def joinWords : List String → String
   | [] => ""

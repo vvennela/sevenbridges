@@ -8,7 +8,7 @@ on stdout (DESIGN.md §9).
 
 Requests:
 - `{"cmd": "puzzle"}`: the current puzzle, the culture text and building prices.
-- `{"cmd": "demo"}`: switch back to the hand-made demo puzzle and return it.
+- `{"cmd": "demo"}`: switch to the hand-made test fixture (Old Harbor) and return it.
 - `{"cmd": "evaluate", "solution": …}`: the full report for a layout.
 - `{"cmd": "solve"}`: the proven best layout.
 - `{"cmd": "generate", "map": …, "routes": […], "seed": n}`: make a new puzzle
@@ -23,13 +23,15 @@ def numbersJson : Json := Json.mkObj [
   ("routeCost", Numbers.routeBuildCost + Numbers.routeYearlyCost * Numbers.years),
   ("stationCost", Numbers.stationBuildCost + Numbers.stationYearlyCost * Numbers.years),
   ("bridgeCost", Numbers.bridgeCost),
+  ("residentsPerCat", Numbers.residentsPerCat),
   ("years", Numbers.years)]
 
 def optionJson (b : Building) : Json := Json.mkObj [
   ("building", toJson b), ("cost", b.cost), ("residents", b.residents), ("jobs", b.jobs)]
 
 def puzzleJson (p : Puzzle) : Json := Json.mkObj [
-  ("puzzle", toJson p),
+  -- `stationSites` repeats `metroSites` for older frontends.
+  ("puzzle", (toJson p).setObjVal! "stationSites" (toJson p.metroSites)),
   ("culture", toJson (p.groups.map Group.describe)),
   ("options", Json.arr ((Building.empty :: p.allowed).map optionJson).toArray),
   ("fixedOptions", Json.arr ((p.fixed.filterMap id).map optionJson).toArray),
@@ -98,7 +100,12 @@ def handle (g : Game) (req : Json) : Except String (Json × Game) := do
     let info := Json.mkObj [("attempts", r.attempts), ("work", r.work),
       ("workBudget", Generator.generatorStepBudget)]
     match r.puzzle, r.verdict with
-    | some q, some v => return (Json.mkObj [("generated", true), ("info", info),
+    | some q, some v =>
+      let info := info.setObjVal! "randomPlay"
+        (Json.mkObj [("median", v.median), ("p95", v.p95), ("rated", v.rated)])
+      return (Json.mkObj [("generated", true), ("info", info),
+        ("verified", Json.mkObj [("theorem", "SevenBridges.solve_is_best"), ("simSeed", q.simSeed),
+          ("bestScore", v.bestScore)]),
         ("puzzle", puzzleJson q)], { puzzle := q, best := some (some v.best) })
     | _, _ => return (Json.mkObj [("generated", false), ("info", info)], g)
   | c => throw s!"unknown command {c}"

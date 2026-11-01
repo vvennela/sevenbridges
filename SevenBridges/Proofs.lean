@@ -100,14 +100,7 @@ theorem bestOf_max {α : Type} (f : α → Int) :
 
 /-! ## The scored list -/
 
-/-- The cost in the report is `costOf`. -/
-theorem report_cost (p : Puzzle) (s : Solution) : (report p s).cost = costOf p s := rfl
-
 @[simp] theorem prepare_puzzle (p : Puzzle) : (prepare p).puzzle = p := rfl
-
-/-- The score in the report is `scoreWith`. -/
-theorem evaluateWith_score (c : Context) (s : Solution) :
-    (evaluateWith c s).score = scoreWith c s := rfl
 
 theorem mem_scoredValid {p : Puzzle} {s : Solution} {v : Int} :
     (s, v) ∈ scoredValid p ↔ s ∈ candidates p ∧ Valid p s ∧ v = score p s := by
@@ -192,7 +185,7 @@ theorem fits_empty (p : Puzzle) : FitsPuzzle p (emptyLayout p) := by
 
 /-- **Every puzzle has a valid layout**: the empty one. -/
 theorem empty_valid (p : Puzzle) : Valid p (emptyLayout p) := by
-  unfold Valid ValidWith
+  unfold Valid ValidWith TransitPays
   refine ⟨fits_empty p, ?_, ?_, ?_⟩
   · simp only [prepare_puzzle, costOf_empty]; exact Nat.zero_le _
   · intro r _ hon
@@ -248,11 +241,11 @@ theorem length_allSwitches (n : Nat) : (allSwitches n).length = 2 ^ n := by
 
 theorem length_candidates (p : Puzzle) : (candidates p).length = candidateCount p := by
   unfold candidates candidateCount
-  rw [length_flatMap_const _ _ (2 ^ p.routes.length * (p.stationSites.length + 1)
+  rw [length_flatMap_const _ _ (2 ^ p.routes.length * (p.metroSites.length + 1)
     * 2 ^ p.bridgeSites.length)]
   · rw [length_allPicks, Nat.mul_assoc, Nat.mul_assoc, Nat.mul_assoc]
   · intro b _
-    rw [length_flatMap_const _ _ ((p.stationSites.length + 1) * 2 ^ p.bridgeSites.length)]
+    rw [length_flatMap_const _ _ ((p.metroSites.length + 1) * 2 ^ p.bridgeSites.length)]
     · rw [length_allSwitches, Nat.mul_assoc]
     · intro r _
       rw [length_flatMap_const _ _ (2 ^ p.bridgeSites.length)]

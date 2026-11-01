@@ -3,7 +3,7 @@ import SevenBridges.Rules.Buildings
 import SevenBridges.Rules.Culture
 
 /-!
-# Puzzles and solutions (DESIGN.md §3.2, §4, §7)
+# Puzzles and solutions (DESIGN.md §3.2, §4, §7, §15)
 -/
 
 namespace SevenBridges
@@ -26,22 +26,29 @@ structure Puzzle where
   /-- Buildings the player may choose for an open block. Empty is always allowed. -/
   allowed : List Building
   /-- Already-built blocks: entry `i` is `some b` if block `i` is fixed as `b`.
-  Missing entries mean the block is open. -/
+  Missing entries mean the block is open. Generated levels have none
+  (`Generator.generate_no_fixed`); only the test fixture uses them. -/
   fixed : List (Option Building)
   /-- Bus routes the player can turn on. -/
   routes : List Route
-  /-- Blocks where a subway station may be built. -/
-  stationSites : List Nat
+  /-- The blocks along the metro line to downtown, from the edge of town
+  inward. The metro station may be built on one of them. -/
+  metroSites : List Nat
+  /-- Where the metro line enters the town (for drawing only). -/
+  metroEntry : Point := ⟨0, 0⟩
   /-- River segments where a bridge may be built: numbers of segments in
   `map.segments`. -/
   bridgeSites : List Nat
   groups : List Group
   /-- Budget in thousands of dollars. -/
   budget : Nat
+  /-- The seed of the cat simulation: it decides each cat's traits
+  (`Rules/Cats.lean`). -/
+  simSeed : Nat := 0
 deriving Repr, Inhabited
 
 /-- A player's answer: one building per block (in block order), which routes are
-on (in route order), where the subway station goes, if anywhere, and which
+on (in route order), where the metro station goes, if anywhere, and which
 bridges are built (in `bridgeSites` order). -/
 structure Solution where
   build : List Building
@@ -72,8 +79,8 @@ end Puzzle
 
 /-! ## Numbers used by the rules
 
-All money is in thousands of dollars, all distances are in map units (the map
-is about 200 units across). Change these freely; no proof depends on them. -/
+All money is in thousands of dollars. Change these freely; no proof depends
+on them. -/
 
 namespace Numbers
 
@@ -83,9 +90,9 @@ def years : Nat := 10
 def routeBuildCost : Nat := 50
 /-- Cost to run a bus route for a year. -/
 def routeYearlyCost : Nat := 10
-/-- Cost to build the subway station. -/
+/-- Cost to build the metro station. -/
 def stationBuildCost : Nat := 100
-/-- Cost to run the subway station for a year. -/
+/-- Cost to run the metro station for a year. -/
 def stationYearlyCost : Nat := 15
 /-- Cost to build a bridge. -/
 def bridgeCost : Nat := 120
@@ -94,8 +101,11 @@ def bridgeCost : Nat := 120
 def fare : Nat := 2
 /-- Cost to run a bus route for a day, in dollars. -/
 def routeDailyCost : Nat := 60
-/-- Cost to run the station for a day, in dollars. -/
+/-- Cost to run the metro station for a day, in dollars. -/
 def stationDailyCost : Nat := 80
+
+/-- Residents each cat stands for. -/
+def residentsPerCat : Nat := 5
 
 /-- Buses each route runs in each direction in the morning rush. -/
 def busesPerRush : Nat := 3
@@ -103,29 +113,35 @@ def busesPerRush : Nat := 3
 def busCapacity : Nat := 15
 /-- Riders a day a route needs to pay for itself: daily cost ÷ fare, rounded up. -/
 def minRouteRiders : Nat := (routeDailyCost + fare - 1) / fare
-/-- Riders a day the station needs to pay for itself. -/
+/-- Riders a day the metro station needs to pay for itself. -/
 def minStationRiders : Nat := (stationDailyCost + fare - 1) / fare
 
-/-- Most outside workers the station brings to one block. -/
+/-- Most downtown workers the metro brings to one office block. -/
 def stationWorkersPerBlock : Nat := 20
-/-- Outside shoppers a station brings for each shop story within its reach. -/
+/-- Outside shoppers the metro brings for each shop floor within its reach. -/
 def shoppersPerShopStory : Nat := 10
 
-/-- A group whose happiness per person is below this is unhappy. -/
-def unhappyLine : Int := 2
+/-- A resident whose happiness is below this is unhappy. -/
+def unhappyLine : Int := 1
 /-- Crime: points lost for each unhappy resident, for each point of happiness
 they are below the line. -/
 def unhappyCost : Nat := 2
 /-- Points lost for each missing home in a housing shortage. -/
 def shortageCost : Nat := 2
 
-/-- Points for each filled job. -/
+/-- Points for each filled job in the neighborhood. -/
 def jobWorth : Nat := 5
+/-- Points for each resident who rides the metro to a job downtown. -/
+def metroJobWorth : Nat := 3
+/-- Points for each resident who drives to a job downtown (a long commute). -/
+def carJobWorth : Nat := 1
 /-- Extra output of an office, in percent, for each office next to it. -/
 def officeBonusPerOffice : Nat := 20
 /-- Most extra output an office gets from offices next to it, in percent. -/
 def officeBonusMax : Nat := 40
-/-- Customers a shop can serve a day, per story. -/
+/-- Extra output of an office with a café or restaurant next to it (lunch), in percent. -/
+def lunchBonus : Nat := 20
+/-- Customers a shop can serve a day, per floor. -/
 def customersPerShopStory : Nat := 20
 /-- Points for each customer a shop serves. -/
 def saleWorth : Nat := 2

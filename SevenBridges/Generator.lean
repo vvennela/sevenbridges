@@ -1,16 +1,16 @@
 import SevenBridges.BranchProofs
 
 /-!
-# Puzzle generator (DESIGN.md §8.5)
+# Level generator (DESIGN.md §8.5, §15)
 
 The generator takes a map and bus routes (made by `tools/genmap.mjs`) and a
-seed. It makes random puzzles on that map, solves each one, and keeps the first
-one that is interesting and hard enough.
+seed. It makes random levels on that map, solves each one, and keeps the
+first one that is interesting and hard enough.
 
-The generator is **not trusted**: the best solution of the puzzle it returns
-is found by the solver, which `solve_is_best` proves right. What we do prove
-about the generator is that its work is bounded (`generate_work_le`): it never
-takes more than `generatorStepBudget` steps in total.
+The generator is **not trusted**: the best plan of the level it returns is
+found by the solver, which `solve_is_best` proves right. What we do prove
+about the generator is that its work is bounded (`generate_work_le`) and that
+its levels have no starting blocks (`generate_no_fixed`).
 -/
 
 namespace SevenBridges
@@ -43,11 +43,29 @@ def Rng.choose {α : Type} (r : Rng) (l : List α) (k : Nat) : List α × Rng :=
     let (v, r) := r.next; (acc ++ [(v, x)], r)) ([], r)
   (((keyed.mergeSort (fun a b => a.1 ≤ b.1)).take k).map (·.2), r)
 
-/-! ## Making a random puzzle -/
+/-! ## Resident groups -/
 
-def groupNames : List String := ["Families", "Students", "Retirees", "Young professionals", "Artists"]
+/-- The pool of resident groups: what the usual cat of each group cares about
+and hates, and how the group's cats spend their day. Each level picks 2 or 3. -/
+def groupPool : List Group :=
+  [{ name := "Families", share := 0, types := [⟨"Families", 100, [.parks, .quiet, .cleanAir], [.nightlife]⟩]
+     works := 55, studies := 25, drives := 45, buses := 30, eatsOut := 25, goesOut := 10 },
+   { name := "Students", share := 0, types := [⟨"Students", 100, [.nightlife, .food, .transit], []⟩]
+     works := 25, studies := 70, drives := 5, buses := 50, eatsOut := 70, goesOut := 70 },
+   { name := "Professionals", share := 0, types := [⟨"Professionals", 100, [.transit, .food, .shops], [.parks]⟩]
+     works := 90, studies := 5, drives := 35, buses := 35, eatsOut := 60, goesOut := 40 },
+   { name := "Elderly", share := 0, types := [⟨"Elderly", 100, [.quiet, .parks, .cleanAir], [.nightlife]⟩]
+     works := 10, studies := 0, drives := 20, buses := 45, eatsOut := 30, goesOut := 5 },
+   { name := "Artists", share := 0, types := [⟨"Artists", 100, [.variety, .nightlife, .food], [.shops]⟩]
+     works := 50, studies := 20, drives := 10, buses := 40, eatsOut := 50, goesOut := 60 },
+   { name := "Urbanites", share := 0, types := [⟨"Urbanites", 100, [.transit, .variety, .shops], [.parks]⟩]
+     works := 80, studies := 10, drives := 10, buses := 55, eatsOut := 70, goesOut := 50 },
+   { name := "Rural newcomers", share := 0, types := [⟨"Rural newcomers", 100, [.parks, .quiet], [.transit]⟩]
+     works := 65, studies := 5, drives := 70, buses := 10, eatsOut := 20, goesOut := 20 }]
 
-def shares : List (Nat × Nat) := [(50, 50), (60, 40), (70, 30)]
+/-- How the town's cats split between 2 or 3 groups, in percent. -/
+def shares2 : List (Nat × Nat) := [(50, 50), (60, 40), (70, 30)]
+def shares3 : List (Nat × Nat × Nat) := [(40, 30, 30), (50, 30, 20), (34, 33, 33)]
 
 /-- The name of a personality that cares about (`true`) or hates (`false`)
 factor `f`. -/
@@ -58,12 +76,16 @@ def typeName : Factor → Bool → String
   | .nightlife, false => "Early risers"
   | .quiet, true => "Light sleepers"
   | .quiet, false => "Buzz seekers"
-  | .transit, true => "Car-free"
-  | .transit, false => "Drivers"
+  | .transit, true => "Transit fans"
+  | .transit, false => "Car lovers"
   | .shops, true => "Shoppers"
   | .shops, false => "Minimalists"
   | .variety, true => "Mix lovers"
   | .variety, false => "Purists"
+  | .food, true => "Foodies"
+  | .food, false => "Home cooks"
+  | .cleanAir, true => "Fresh-air fans"
+  | .cleanAir, false => "City dwellers"
 
 /-- A minority personality: the usual one with factor `f` flipped. A factor
 the usual type cares about becomes hated, one it hates becomes cared about,
@@ -77,23 +99,109 @@ def flipped (usual : Personality) (f : Factor) (care : Bool) (share : Nat) : Per
 /-- Shares of the minority types, in percent of the group. -/
 def minorityShares : List (List Nat) := [[20], [30], [20, 10], [15, 15]]
 
-/-- A random group: the usual type cares about two factors and maybe hates
-one; one or two minority types each flip one factor. -/
-def randomGroup (r : Rng) (name : String) (share : Nat) : Group × Rng :=
-  let (cares, r) := r.choose Factor.all 2
-  let rest := Factor.all.filter fun f => f ∉ cares
-  let (hateCount, r) := r.below 2
-  let (hates, r) := r.choose rest hateCount
+/-- A group from the pool with its share, and one or two minority
+personalities that each flip one factor. -/
+def randomGroup (r : Rng) (base : Group) (share : Nat) : Group × Rng :=
+  let usual0 := base.types.headD default
   let (minor, r) := r.pick minorityShares
-  let usual : Personality := { name, share := 100 - minor.sum, cares, hates }
+  let usual : Personality := { usual0 with share := 100 - minor.sum }
   let (flips, r) := r.choose Factor.all minor.length
   let (others, r) := (minor.zip flips).foldl (fun (acc, r) (sh, f) =>
     let (v, r) := r.below 2
     (acc ++ [flipped usual f (v == 1) sh], r)) ([], r)
-  ({ name, share, types := usual :: others }, r)
+  ({ base with share, types := usual :: others }, r)
 
-/-- Every height of a building kind. -/
-def allHeights (kind : Height → Building) : List Building := [kind .one, kind .two, kind .three]
+/-- 2 or 3 random groups from the pool. -/
+def randomGroups (r : Rng) (count : Nat) : List Group × Rng :=
+  let (bases, r) := r.choose groupPool count
+  let (sh, r) : List Nat × Rng :=
+    if count ≤ 2 then let (s, r) := r.pick shares2; ([s.1, s.2], r)
+    else let (s, r) := r.pick shares3; ([s.1, s.2.1, s.2.2], r)
+  (bases.zip sh).foldl (fun (acc, r) (g, s) =>
+    let (g, r) := randomGroup r g s; (acc ++ [g], r)) ([], r)
+
+/-! ## The metro line -/
+
+/-- The center of the map: the average of its intersections. -/
+def mapCenter (m : RoadMap) : Point :=
+  let n : Int := max 1 m.points.length
+  ⟨(m.points.foldl (· + ·.x) 0) / n, (m.points.foldl (· + ·.y) 0) / n⟩
+
+/-- Squared distance between two points. -/
+def dist2 (p q : Point) : Nat := (p.x - q.x).natAbs ^ 2 + (p.y - q.y).natAbs ^ 2
+
+/-- Blocks on the edge of town: they have a side no other block shares. -/
+def edgeBlocks (m : RoadMap) : List Nat :=
+  (List.range m.blockCount).filter fun i =>
+    (m.block i).sides.any fun side => (m.blocks.filter fun b => b.sides.contains side).length == 1
+
+/-- The metro line: it enters at an edge block and runs `len` blocks toward the
+middle of town, each next block the touching one closest to the middle.
+Also returns where it enters (the edge block's corner farthest from the
+middle). -/
+def metroLine (r : Rng) (m : RoadMap) (len : Nat) : (List Nat × Point) × Rng :=
+  let mid := mapCenter m
+  let (start, r) := r.pick (edgeBlocks m)
+  let step (line : List Nat) : List Nat :=
+    let last := line.getLastD start
+    let next := (List.range m.blockCount).filter fun j => decide (m.Touch last j) && !line.contains j
+    match next.foldl (fun best j => match best with
+      | none => some j
+      | some b => if dist2 (m.center j) mid < dist2 (m.center b) mid then some j else some b) none with
+    | some j => line ++ [j]
+    | none => line
+  let line := (List.range (len - 1)).foldl (fun l _ => step l) [start]
+  let entry := (m.block start).corners.foldl (fun best i =>
+    if dist2 (m.point i) mid > dist2 best mid then m.point i else best) mid
+  ((line, entry), r)
+
+/-! ## Making a random level -/
+
+/-- Level sizes. The size sets how much choice a level offers, so that the
+proven solver finishes in time (DESIGN.md §8.6). -/
+inductive Size
+  /-- 5 blocks or fewer. -/
+  | easy
+  /-- 6 or 7 blocks. -/
+  | medium
+  /-- 8 or 9 blocks. -/
+  | hard
+deriving Repr, DecidableEq
+
+def Size.ofBlocks (n : Nat) : Size :=
+  if n ≤ 5 then .easy else if n ≤ 7 then .medium else .hard
+
+/-- Most bridge sites a level of this size offers. -/
+def Size.bridgeSites : Size → Nat
+  | .easy => 2
+  | .medium => 2
+  | .hard => 1
+
+/-- Blocks along the metro line. -/
+def Size.metroLength : Size → Nat
+  | .easy => 2
+  | .medium => 3
+  | .hard => 3
+
+/-- How many office heights a level offers (picked at random from 1–5). -/
+def Size.officeHeights : Size → Nat
+  | .easy => 3
+  | .medium => 1
+  | .hard => 1
+
+/-- How many of food, shop, bar and park a level leaves out. -/
+def Size.dropExtras : Size → Nat
+  | .easy => 0
+  | .medium => 1
+  | .hard => 2
+
+/-- Home heights a level of this size offers. -/
+def Size.homes : Size → List Building
+  | .hard => [.housing .one, .housing .two]
+  | _ => [.housing .one, .housing .two, .housing .three]
+
+def allOfficeHeights : List Building :=
+  [.office .one, .office .two, .office .three, .office .four, .office .five]
 
 /-- The river segments of a map, by number. -/
 def riverSegments (m : RoadMap) : List Nat :=
@@ -107,127 +215,88 @@ def chooseBridgeSites (r : Rng) (m : RoadMap) (routes : List Route) (most : Nat)
   let (others, r) := r.choose (river.filter (· ∉ used)) (most - min most used.length)
   ((used ++ others).take 7 |>.mergeSort (· ≤ ·), r)
 
-/-- Puzzle sizes. The size sets how much choice a puzzle offers, so that the
-proven solver finishes in time (DESIGN.md §8.6). -/
-inductive Size
-  /-- 6 blocks or fewer: every height, up to 3 bridge sites. -/
-  | easy
-  /-- 7 blocks: every height, one of shops, bars and parks left out, up to 2
-  bridge sites. -/
-  | medium
-  /-- 8 or 9 blocks: buildings up to 2 stories (shops 1), one of shops, bars
-  and parks left out, 1 bridge site (more if routes cross the river). -/
-  | hard
-deriving Repr, DecidableEq
-
-def Size.ofBlocks (n : Nat) : Size :=
-  if n ≤ 6 then .easy else if n = 7 then .medium else .hard
-
-/-- Most bridge sites a puzzle of this size offers. -/
-def Size.bridgeSites : Size → Nat
-  | .easy => 3
-  | .medium => 2
-  | .hard => 1
-
-/-- The heights a puzzle of this size offers for a building kind. -/
-def Size.heights (sz : Size) (kind : Height → Building) : List Building :=
-  if sz = .hard then [kind .one, kind .two] else allHeights kind
-
-/-- A random puzzle on a map (budget not set yet). The station may go on any
-block. Each puzzle leaves out at most one of shops, bars and parks, for
-variety. No block is already built. Bigger maps offer less choice (`Size`):
-fewer bridge sites, and on the biggest maps lower buildings. -/
+/-- A random level on a map (budget not set yet): random groups, allowed
+buildings, bridge sites, metro line and simulation seed. No block is
+already built. -/
 def randomPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) :
     Puzzle × Rng :=
-  let n := m.blockCount
-  let sz := Size.ofBlocks n
+  let sz := Size.ofBlocks m.blockCount
+  let (offices, r) := r.choose allOfficeHeights sz.officeHeights
   let extras : List (List Building) :=
-    [if sz = .hard then [.shop .one] else allHeights .shop, [.bar], [.park]]
-  -- 3 means "leave nothing out"; medium and hard puzzles always leave one out.
-  let (drop, r) := r.below (if sz = .easy then 4 else 3)
-  let kept := (List.range 3).filterMap fun i => if i = drop then none else extras[i]?
-  let allowed := sz.heights .housing ++ sz.heights .office ++ kept.flatten
-  let (names, r) := r.choose groupNames 2
-  let (split, r) := r.pick shares
-  let (g1, r) := randomGroup r (names.getD 0 "Families") split.1
-  let (g2, r) := randomGroup r (names.getD 1 "Students") split.2
+    [[.food], if sz = .hard then [.shop .one] else [.shop .one, .shop .two], [.bar], [.park]]
+  let (kept, r) := r.choose extras (4 - sz.dropExtras)
+  let offices := offices.mergeSort fun a b => a.stories ≤ b.stories
+  let allowed := sz.homes ++ offices ++ kept.flatten
+  let (count, r) := r.below 2
+  let (groups, r) := randomGroups r (count + 2)
   let (bridgeSites, r) := chooseBridgeSites r m routes sz.bridgeSites
-  ({ name, map := m, allowed, fixed := [], routes,
-     stationSites := List.range n, bridgeSites, groups := [g1, g2],
-     budget := 0 }, r)
+  let ((metroSites, metroEntry), r) := metroLine r m sz.metroLength
+  let (simSeed, r) := r.below 1000000
+  ({ name, map := m, allowed, fixed := [], routes, metroSites, metroEntry, bridgeSites, groups,
+     budget := 0, simSeed }, r)
 
-/-- A random solution that fits the puzzle: the "planted" answer. -/
+/-- A random layout that fits the puzzle. -/
 def randomSolution (r : Rng) (p : Puzzle) : Solution × Rng :=
   let (build, r) := p.choices.foldl (fun (acc, r) opts =>
     let (b, r) := r.pick opts; (acc ++ [b], r)) ([], r)
   let (routesOn, r) := p.routes.foldl (fun (acc, r) _ =>
     let (v, r) := r.below 2; (acc ++ [v == 1], r)) ([], r)
-  let (k, r) := r.below (p.stationSites.length + 1)
+  let (k, r) := r.below (p.metroSites.length + 1)
   let (bridges, r) := p.bridgeSites.foldl (fun (acc, r) _ =>
     let (v, r) := r.below 2; (acc ++ [v == 1], r)) ([], r)
-  ({ build, routesOn, station := if k = 0 then none else p.stationSites[k - 1]?, bridges }, r)
+  ({ build, routesOn, station := if k = 0 then none else p.metroSites[k - 1]?, bridges }, r)
 
-/-! ## Checks on a solved puzzle -/
+/-- Random play: a random layout, cut down to the budget; if its transit
+breaks a rule, no transit. -/
+def randomPlay (r : Rng) (p : Puzzle) : Solution × Rng :=
+  let (s, r) := randomSolution r p
+  let s := trimToBudget p s
+  let s := if decide (ValidWith (prepare p) s) then s
+    else trimToBudget p { s with routesOn := s.routesOn.map fun _ => false, station := none }
+  (s, r)
 
-/-- Greedy play: fill open blocks one at a time with whatever scores best right
-then, then try each route and station site. Returns the layout and how many
-layouts it scored. -/
-def greedy (p : Puzzle) : Solution × Nat :=
+/-! ## Checks on a solved level -/
+
+/-- Random layouts tried when checking that random play does badly. -/
+def randomTries : Nat := 200
+/-- Most valid random layouts rated. -/
+def randomRated : Nat := 200
+
+/-- The rating at percent `q` of a sorted list of ratings. -/
+def percentile (sorted : Array Nat) (q : Nat) : Nat :=
+  if sorted.isEmpty then 0 else sorted.getD (min (sorted.size - 1) (sorted.size * q / 100)) 0
+
+/-- Ratings of random valid layouts: up to `randomRated` of them, from at
+most `randomTries` random layouts, sorted. -/
+def randomRatings (p : Puzzle) (bestScore : Int) (seed : Nat) : Array Nat :=
   let c := prepare p
-  let value (s : Solution) : Option Int :=
-    if decide (ValidWith c s) then some (scoreWith c s) else none
-  let better (s t : Solution) : Bool :=
-    match value s, value t with
-    | some a, some b => a > b
-    | some _, none => true
-    | _, _ => false
-  let start : Solution :=
-    { build := (List.range p.blockCount).map fun i => (p.fixedAt i).getD .empty
-      routesOn := p.routes.map fun _ => false, station := none
-      bridges := p.bridgeSites.map fun _ => false }
-  let (s, steps) := (List.range p.blockCount).foldl (fun (s, steps) i =>
-    (p.choicesFor i).foldl (fun (s, steps) b =>
-      let t := { s with build := s.build.set i b }
-      (if better t s then t else s, steps + 2)) (s, steps)) (start, 0)
-  let (s, steps) := (List.range p.bridgeSites.length).foldl (fun (s, steps) i =>
-    let t := { s with bridges := s.bridges.set i true }
-    (if better t s then t else s, steps + 2)) (s, steps)
-  -- Each route, with the bridges it needs.
-  let (s, steps) := (List.range p.routes.length).foldl (fun (s, steps) i =>
-    let t := { s with routesOn := s.routesOn.set i true,
-                      bridges := (c.bridgesFor i).foldl (fun b k => b.set k true) s.bridges }
-    (if better t s then t else s, steps + 2)) (s, steps)
-  p.stationSites.foldl (fun (s, steps) k =>
-    let t := { s with station := some k }
-    (if better t s then t else s, steps + 2)) (s, steps)
+  let (ratings, _) := (List.range randomTries).foldl (fun (acc, r) _ =>
+    if acc.size ≥ randomRated then (acc, r) else
+    let (s, r) := randomPlay r p
+    if decide (ValidWith c s) then (acc.push (ratingWith c bestScore s), r) else (acc, r))
+    ((#[] : Array Nat), (⟨seed⟩ : Rng))
+  ratings.qsort (· < ·)
 
-/-- Upper bound on the layouts `greedy` scores. -/
-def greedyCount (p : Puzzle) : Nat :=
-  2 * ((p.choices.map List.length).foldl (· + ·) 0 + p.routes.length + p.bridgeSites.length
-    + p.stationSites.length)
-
-/-- The verdict on one solved puzzle. -/
+/-- The verdict on one solved level. -/
 structure Verdict where
   best : Solution
   bestScore : Int
-  usesTransit : Bool
-  greedyScore : Int
-  hard : Bool
+  emptyScore : Int
+  /-- Median and 95th percentile rating of random valid layouts. -/
+  median : Nat
+  p95 : Nat
+  rated : Nat
 deriving Repr
 
-/-- Solve a puzzle with `fuel` steps and judge it. Returns the verdict (`none`
+/-- Solve a level with `fuel` steps and judge it. Returns the verdict (`none`
 if the solver ran out of steps) and the steps taken. -/
 def judge (p : Puzzle) (fuel : Nat) : Option Verdict × Nat :=
   let r := solveWithFuel p fuel
   if r.fuel = 0 then (none, r.steps) else
-  let best := r.best
-  let bestScore := r.bestScore
-  let usesTransit := best.routesOn.any id || best.station.isSome || best.bridges.any id
-  let (g, _) := greedy p
-  let greedyScore := score p g
-  -- Greedy play must fall short of the best by at least 10%.
-  let hard := bestScore > 0 && greedyScore * 10 < bestScore * 9
-  (some { best, bestScore, usesTransit, greedyScore, hard }, r.steps)
+  let sorted := randomRatings p r.bestScore (p.simSeed + 17)
+  (some { best := r.best, bestScore := r.bestScore, emptyScore := score p (emptyLayout p)
+          median := percentile sorted 50, p95 := percentile sorted 95, rated := sorted.size },
+   r.steps)
 
 theorem judge_steps_le (p : Puzzle) (fuel : Nat) : (judge p fuel).2 ≤ fuel := by
   have h1 := solveWithFuel_steps_fuel_le p fuel
@@ -235,11 +304,12 @@ theorem judge_steps_le (p : Puzzle) (fuel : Nat) : (judge p fuel).2 ≤ fuel := 
   simp only
   split <;> simp only <;> omega
 
-/-- Keep a puzzle whose best layout uses transit, has homes, and beats greedy
-play clearly.
-(Ties for the best are allowed: on near-symmetric maps, mirror-image layouts
-often tie, and the rating only compares scores.) -/
-def Verdict.accepted (v : Verdict) : Bool := v.usesTransit && v.hard && v.best.build.any (·.isHousing)
+/-- Keep a level whose best plan has homes and beats the empty town, and where
+random play does badly: the median random valid layout rates at most 50, and
+95% of them rate at most 85. -/
+def Verdict.accepted (v : Verdict) : Bool :=
+  v.best.build.any (·.isHousing) && decide (v.bestScore > v.emptyScore)
+    && decide (v.rated ≥ 20) && decide (v.median ≤ 50) && decide (v.p95 ≤ 85)
 
 /-! ## The generator, with a step budget -/
 
@@ -249,31 +319,34 @@ def attemptFuel : Nat := 900000
 def generatorStepBudget : Nat := 1800000
 /-- Most attempts. -/
 def maxAttempts : Nat := 40
+/-- Work counted for checking one level besides the search: each random
+layout tried counts as one step. -/
+def checkCost : Nat := randomTries
 
 /-- The result of generating. -/
 structure Result where
   puzzle : Option Puzzle
   verdict : Option Verdict
   attempts : Nat
-  /-- Steps taken (search steps plus layouts scored by greedy play), in total. -/
+  /-- Steps taken (search steps plus random layouts tried), in total. -/
   work : Nat
 
-/-- A random puzzle with its budget set from a random planted layout. -/
+/-- A random level with its budget set from a random layout. -/
 def attemptPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) : Puzzle × Rng :=
   let pr := randomPuzzle r m routes name
   let sr := randomSolution pr.2 pr.1
   let mr := sr.2.below 6
   -- No block is already built.
-  ({ pr.1 with fixed := [], budget := costOf pr.1 sr.1 + 10 * mr.1 }, mr.2)
+  ({ pr.1 with fixed := [], budget := costOf pr.1 sr.1 + 60 + 20 * mr.1 }, mr.2)
 
 /-- Try up to `fuel` more attempts, with `left` steps of work left. Each attempt
-makes a puzzle with `attempt`. -/
+makes a level with `attempt`. -/
 def loop (attempt : Rng → Puzzle × Rng) :
     Nat → Rng → Nat → Nat → Nat → Result
   | 0, _, _, attempts, work => { puzzle := none, verdict := none, attempts, work }
   | fuel + 1, r, left, attempts, work =>
     let (p, r) := attempt r
-    let g := greedyCount p
+    let g := checkCost
     if g + 1 > left then
       -- Not enough work left for another attempt: stop.
       { puzzle := none, verdict := none, attempts, work }
@@ -287,7 +360,7 @@ def loop (attempt : Rng → Puzzle × Rng) :
         else loop attempt fuel r (left - cost) (attempts + 1) (work + cost)
       | none => loop attempt fuel r (left - cost) (attempts + 1) (work + cost)
 
-/-- Generate a puzzle on map `m` with bus routes `routes`, from a seed. -/
+/-- Generate a level on map `m` with bus routes `routes`, from a seed. -/
 def generate (m : RoadMap) (routes : List Route) (name : String) (seed : Nat) : Result :=
   loop (attemptPuzzle · m routes name) maxAttempts ⟨seed⟩ generatorStepBudget 0 0
 
@@ -305,11 +378,11 @@ theorem loop_work_le (attempt : Rng → Puzzle × Rng) :
     generalize attempt r = x
     obtain ⟨p, r'⟩ := x
     simp only
-    by_cases hg : greedyCount p + 1 > left
+    by_cases hg : checkCost + 1 > left
     · simp [hg]
     · simp only [hg, if_false]
-      have hu := judge_steps_le p (min attemptFuel (left - greedyCount p))
-      cases hres : (judge p (min attemptFuel (left - greedyCount p))).1 with
+      have hu := judge_steps_le p (min attemptFuel (left - checkCost))
+      cases hres : (judge p (min attemptFuel (left - checkCost))).1 with
       | none =>
         simp only
         refine Nat.le_trans (ih _ _ _ _) ?_; omega
@@ -327,7 +400,7 @@ theorem generate_work_le (m : RoadMap) (routes : List Route) (name : String) (se
 
 /-! ## Generated levels have no starting blocks -/
 
-/-- Every puzzle the loop returns was made by `attempt`. -/
+/-- Every level the loop returns was made by `attempt`. -/
 theorem loop_puzzle_made (attempt : Rng → Puzzle × Rng) :
     ∀ (fuel : Nat) (r : Rng) (left attempts work : Nat) (q : Puzzle),
       (loop attempt fuel r left attempts work).puzzle = some q → ∃ r', (attempt r').1 = q := by
@@ -350,7 +423,7 @@ theorem loop_puzzle_made (attempt : Rng → Puzzle × Rng) :
       · exact ih _ _ _ _ q h
 
 /-- **Generated levels have no starting blocks**: every block of a generated
-puzzle is open. -/
+level is open. -/
 theorem generate_no_fixed (m : RoadMap) (routes : List Route) (name : String) (seed : Nat)
     (q : Puzzle) (h : (generate m routes name seed).puzzle = some q) : q.fixed = [] := by
   obtain ⟨r, hr⟩ := loop_puzzle_made _ _ _ _ _ _ q h
