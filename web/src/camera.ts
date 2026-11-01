@@ -13,8 +13,9 @@ export class MapCamera {
   goal: CamState;
   minDist = 3;
   maxDist = 80;
-  minPolar = THREE.MathUtils.degToRad(24);
-  maxPolar = THREE.MathUtils.degToRad(66);
+  /** From nearly top-down to a low side view (the camera always stays above the ground). */
+  minPolar = THREE.MathUtils.degToRad(6);
+  maxPolar = THREE.MathUtils.degToRad(80);
   center = new THREE.Vector3();
   bound = 12;
   /** True while the pointer is dragging (the click handler should ignore this pointer-up). */
@@ -105,6 +106,14 @@ export class MapCamera {
     this.clamp(g);
   }
 
+  /** Turn around the vertical axis and tilt (radians), eased like every other move. */
+  turnTilt(dAz: number, dPolar: number) {
+    this.loose = false;
+    this.goal.az += dAz;
+    this.goal.polar += dPolar;
+    this.clamp(this.goal);
+  }
+
   orbit(dx: number, dy: number) {
     this.goal.az -= dx * 0.006;
     this.goal.polar -= dy * 0.004;
@@ -129,6 +138,15 @@ export class MapCamera {
       }
     }, { passive: false });
 
+    // Safari trackpads: two-finger rotate turns the town
+    let gRot = 0;
+    el.addEventListener("gesturestart", (e) => { e.preventDefault(); gRot = (e as unknown as { rotation: number }).rotation ?? 0; });
+    el.addEventListener("gesturechange", (e) => {
+      e.preventDefault();
+      const r = (e as unknown as { rotation: number }).rotation ?? 0;
+      this.turnTilt(-THREE.MathUtils.degToRad(r - gRot), 0);
+      gRot = r;
+    });
     let down: { x: number; y: number; button: number; alt: boolean } | null = null;
     let last = { x: 0, y: 0 };
     let mode: "none" | "pan" | "orbit" = "none";

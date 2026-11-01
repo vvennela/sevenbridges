@@ -336,3 +336,25 @@ body.pc-open .tray { transform: translateX(calc(-50% - 140px)); }
 .lk-cats { display: inline-flex; align-items: center; gap: 2px; margin-left: 5px; padding-left: 5px; border-left: 1.5px solid #ECE9F4; font-size: 12px; color: var(--ink-soft); }
 .lk-cats svg { width: 14px; height: 14px; }
 .lk-cats b { font-weight: 600; }
+
+/* air lens */
+.legend { position: absolute; right: 18px; top: calc(var(--lens-top, 300px) + 104px); width: 214px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 11.5px; font-weight: 700; color: var(--ink-soft); padding: 5px 10px; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); pointer-events: none; }
+.legend:empty { display: none; }
+.lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 1px 0 6px; }
+.lg:first-child { margin-left: 0; }
+.lg.mint { background: #7FDDB8; } .lg.smog { background: #A9845A; } .lg.heat { background: linear-gradient(90deg, #F9D79A, #F28B6E); width: 16px; }
+.bdg.air { border: 2px solid #A8E6CB; }
+.bdg.air.smog { border-color: #C2A985; }
+.air-line { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; }
+.air-line svg { width: 18px; height: 18px; flex: none; }
+.air-line.smog { color: #8A6A44; } .air-line.clean { color: #3E8A6A; }
+
+/* turn and tilt pad (bottom right, above the safe area) */
+.viewpad { position: absolute; right: 18px; top: calc(var(--lens-top, 300px) + 52px); width: 214px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px; border-radius: 16px; background: var(--panel); border: 2px solid #fff; box-shadow: var(--shadow); }
+.vp { width: 100%; height: 34px; border: none; border-radius: 12px; background: #F3F1F9; display: grid; place-items: center; padding: 0; transition: background 0.12s, transform 0.1s; touch-action: none; }
+.vp svg { width: 20px; height: 20px; }
+.vp:hover { background: #E9E6F1; }
+.vp:active { transform: scale(0.92); background: #DCD8EA; }
+.vp.center { background: #fff; box-shadow: inset 0 0 0 2px #ECE9F4; }
+body.titling #viewpad, body.titling #legend { display: none !important; }
+body[data-lens="air"] .postcard { top: calc(var(--pc-top, 356px) + 46px); }

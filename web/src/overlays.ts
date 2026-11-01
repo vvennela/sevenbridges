@@ -116,19 +116,19 @@ export class Air {
 }
 
 /** Busy streets: a warm translucent wash over each segment, stronger with more traffic. */
-export function trafficWash(segs: [V2, V2][], level: number[], width: number): THREE.Mesh | null {
+export function trafficWash(segs: [V2, V2][], level: number[], width: number, opacity = 0.55, yAt = 0.022): THREE.Mesh | null {
   const m = new GB();
   segs.forEach(([a, b], i) => {
     const lv = level[i] ?? 0;
     if (lv <= 0.05) return;
     const d = norm(sub(b, a)), n = v2(-d.y * width / 2, d.x * width / 2);
     const c = col(lv > 0.66 ? "#F28B6E" : lv > 0.33 ? "#F7B27A" : "#F9D79A");
-    const y = 0.022; // above the road, below the river's banks and water
+    const y = yAt; // by default above the road, below the river's banks and water
     m.quad(w3(add(a, n), y), w3(add(b, n), y), w3(sub(b, n), y), w3(sub(a, n), y), c, [0, 1, 0]);
   });
   if (m.empty) return null;
-  const mesh = new THREE.Mesh(m.build(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false }));
-  mesh.renderOrder = 2;
+  const mesh = new THREE.Mesh(m.build(), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity, depthWrite: false }));
+  mesh.renderOrder = yAt > 0.03 ? 4 : 2;
   return mesh;
 }
 

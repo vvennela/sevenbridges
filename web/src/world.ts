@@ -333,6 +333,14 @@ export class World {
     if (this.wash) this.level.add(this.wash);
   }
   private segPts: [V2, V2][] = [];
+  private heat: THREE.Mesh | null = null;
+  /** Air lens: a bold heat line on streets with cars (0..1 per segment; null clears). */
+  setHeat(level: number[] | null) {
+    if (this.heat) { this.level.remove(this.heat); this.heat.geometry.dispose(); this.heat = null; }
+    if (!level || !this.segPts.length) return;
+    this.heat = trafficWash(this.segPts, level, ROAD_W * 0.42, 0.95, 0.045);
+    if (this.heat) this.level.add(this.heat);
+  }
 
   /** Arcs from a hovered block to the blocks that affect it (null clears). */
   setLinks(links: { from: number; to: number; tone: Link["tone"] }[] | null) {

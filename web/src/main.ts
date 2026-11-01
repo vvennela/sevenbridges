@@ -350,6 +350,7 @@ function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
   document.body.classList.remove("titling");
   $("title").classList.add("hidden");
   renderTown();
+  renderViewPad();
   render();
   showIntro();
   $("loading").classList.add("gone");
@@ -402,6 +403,18 @@ function feelingsFrom(r: EvalReply | null): Feeling[] {
     else if (out[res.block] !== "unhappy") out[res.block] = "happy";
   }
   return out;
+}
+
+/** Cars per street from Lean (report.streets), 0..1, never on unbridged water; null without data. */
+function streetLevels(r: EvalReply | null): number[] | null {
+  const streets = r?.report.streets;
+  if (!streets || !st.pr) return null;
+  const pz = st.pr.puzzle;
+  const cars = pz.map.segments.map(() => 0);
+  for (const x of streets) if (x.segment >= 0 && x.segment < cars.length) cars[x.segment] = x.cars;
+  pz.map.segments.forEach((sg, i) => { if (sg.terrain === "stream" && !(pz.bridgeSites ?? []).some((seg, k) => seg === i && st.bridges[k])) cars[i] = 0; });
+  const top = Math.max(1, ...cars);
+  return cars.map((c) => (c > 0 ? 0.25 + 0.75 * (c / top) : 0));
 }
 
 /** Pollution per block from Lean (report.pollution, or the per-block entries), or null. */
@@ -546,7 +559,7 @@ function showLife(r: EvalReply | null) {
 
 // ---------- player actions ----------
 
-type Lens = "none" | "mood" | "jobs" | "transit";
+type Lens = "none" | "mood" | "jobs" | "transit" | "air";
 let lens: Lens = "none";
 
 /** `?fights`: debug flag, forces the most frequent bar scuffles. */
@@ -851,18 +864,31 @@ const LENSES: { id: Lens; name: string; tip: string }[] = [
   { id: "mood", name: "Mood", tip: "Mood lens: how happy each home is" },
   { id: "jobs", name: "Jobs", tip: "Jobs lens: jobs offered and filled" },
   { id: "transit", name: "Transit", tip: "Transit lens: riders on each route and stop" },
+  { id: "air", name: "Air", tip: "Air lens: clean air and smog, and the cars on each street" },
 ];
 
 function lensIcon(id: Lens) {
   if (id === "mood") return ICON.heart();
   if (id === "jobs") return ICON.briefcase();
   if (id === "transit") return ICON.bus("#6FC3E8");
+  if (id === "air") return FACTOR_ICON.cleanAir;
   return `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="none" stroke="#66718F" stroke-width="2"/><circle cx="12" cy="12" r="2.5" fill="#66718F"/></svg>`;
 }
 
 function renderLenses() {
-  setHTML("lenses", LENSES.map((l) => `<button class="lens ${lens === l.id ? "on" : ""}" data-lens="${l.id}" data-tip="${l.tip}">${lensIcon(l.id)}<span>${l.name}</span></button>`).join("") +
-    `<button class="lens recenter" data-act="recenter" data-tip="Recenter: show the whole town"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="#66718F" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#66718F" stroke-width="2"/></svg><span>Center</span></button>`);
+  setHTML("lenses", LENSES.map((l) => `<button class="lens ${lens === l.id ? "on" : ""}" data-lens="${l.id}" data-tip="${l.tip}">${lensIcon(l.id)}<span>${l.name}</span></button>`).join(""));
+  setHTML("legend", lens === "air" ? `<span class="lg mint"></span>Clean air <span class="lg smog"></span>Smog <span class="lg heat"></span>Streets with cars` : "");
+}
+
+/** The view pad: turn and tilt the town, and recenter. Buttons repeat while held. */
+function renderViewPad() {
+  const ic = (d: string) => `<svg viewBox="0 0 24 24"><path d="${d}" fill="none" stroke="#2E3A59" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  setHTML("viewpad", `
+    <button class="vp" data-view="left" data-tip="Turn the town left (Q)">${ic("M8 7a7 7 0 1 1-2.4 8M8 7H4V3")}</button>
+    <button class="vp" data-view="up" data-tip="Tilt toward a top-down view (R)">${ic("M12 19V6M7 10l5-5 5 5M6 21h12")}</button>
+    <button class="vp center" data-act="recenter" data-tip="Center: show the whole town"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="#2E3A59" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#2E3A59" stroke-width="2"/></svg></button>
+    <button class="vp" data-view="down" data-tip="Tilt toward a low side view (F)">${ic("M12 4v13M7 13l5 5 5-5M6 3h12")}</button>
+    <button class="vp" data-view="right" data-tip="Turn the town right (E)">${ic("M16 7a7 7 0 1 0 2.4 8M16 7h4V3")}</button>`);
 }
 
 /** Happiness per person on each home block (from Lean's residents), or null. */
@@ -897,6 +923,17 @@ function lensTints(): (string | null)[] {
   }
   if (lens === "jobs") return s.build.map((_b, i) => (jobsOf(i, r).jobs > 0 ? "#BFD8F6" : null));
   if (lens === "transit" && s.station !== null) return s.build.map((_b, i) => (i === s.station ? "#C9C8F6" : null));
+  if (lens === "air") {
+    const bl = r?.report.blocks;
+    if (!bl) return s.build.map(() => null);
+    return s.build.map((b, i) => {
+      if (b.kind === "empty") return null;
+      const x = bl.find((y) => y.block === i);
+      if (!x) return null;
+      // polluted: smog brown; cars nearby but a park cleans the air: soft mint; no traffic: fresh mint
+      return x.polluted ? "#A9845A" : x.traffic ? "#BFEBD3" : "#7FDDB8";
+    });
+  }
   return s.build.map(() => null);
 }
 
@@ -906,6 +943,7 @@ function updateLens() {
   renderLenses();
   world.setTint(lensTints());
   world.setBridgeLinks(lens === "mood" || lens === "jobs");
+  world.setHeat(lens === "air" ? streetLevels(shownReply()) : null);
   const r = shownReply();
   const s = shownSolution();
   const widths = st.pr.puzzle.routes.map((_rt, i) => {
@@ -938,6 +976,14 @@ function renderBadges() {
       const C2 = 2 * Math.PI * 9;
       badges.push({ at: blockAt(i, 1.4), html: `<span class="bdg jobs"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#fff" stroke="#E4E0EE" stroke-width="4"/><circle cx="12" cy="12" r="9" fill="none" stroke="#4F7FD0" stroke-width="4" stroke-dasharray="${C2}" stroke-dashoffset="${C2 * (1 - f)}" transform="rotate(-90 12 12)"/></svg>${workers === null ? "" : `${workers}/`}${jobs}</span>` });
     });
+  } else if (lens === "air") {
+    for (const x of r?.report.blocks ?? []) {
+      if (s.build[x.block]?.kind === "empty") continue;
+      const cars = x.cars ?? 0;
+      const parkNext = !!x.traffic && !x.polluted;
+      if (cars > 0) badges.push({ at: blockAt(x.block, 1.3), html: `<span class="bdg air ${x.polluted ? "smog" : ""}">${ICON.car(x.polluted ? "#B08A60" : "#7FC9B0")}${cars}</span>` });
+      else if (parkNext) badges.push({ at: blockAt(x.block, 1.3), html: `<span class="bdg air">${ICON.leaf()}</span>` });
+    }
   } else if (lens === "transit") {
     pr.puzzle.routes.forEach((_rt, i) => {
       if (!s.routesOn[i]) return;
@@ -985,6 +1031,19 @@ function moodDetails(i: number, r: EvalReply | null): string {
       ${hates.length ? `<div class="whys"><b>Has, dislikes:</b>${hates.join("")}</div>` : ""}
       ${lacks.length ? `<div class="whys"><b>Misses:</b>${lacks.join("")}</div>` : ""}</div>`;
   }).join("")}</div>`;
+}
+
+/** Air details for a block: facts from Lean's block report (cars, traffic, smog). */
+function airDetails(i: number, r: EvalReply | null): string {
+  const bl = r?.report.blocks;
+  const x = bl?.find((y) => y.block === i);
+  if (!x) return "";
+  const near = (x.neighbors ?? []).map((n) => n.block);
+  const cars = (x.cars ?? 0) + near.reduce((a, j) => a + (bl!.find((y) => y.block === j)?.cars ?? 0), 0);
+  const line = x.polluted ? `Polluted by ${cars} ${cars === 1 ? "car" : "cars"} from this block and next door`
+    : x.traffic ? (st.build[i]?.kind === "park" ? "Clean air: this park" : "Clean air: park next door")
+    : "No traffic";
+  return `<div class="card-sec"><div class="air-line ${x.polluted ? "smog" : "clean"}">${x.polluted ? ICON.car("#B08A60") : ICON.leaf()}<span>${esc(line)}</span></div></div>`;
 }
 
 /** Job details: offered, filled, and how workers get here (from Lean's trips). */
@@ -1108,6 +1167,7 @@ function renderCard(t: Target) {
       if (here.length) html += `<div class="card-people">${here.map((x) => `<span class="who">${ICON.avatar(groupColor(x.group), AVATAR_FUR[x.group % AVATAR_FUR.length], x.group % 2 ? "scarf" : "tie")}${x.people}
           <i>${x.unhappy ? ICON.cloud() : ICON.heart()}</i></span>`).join("")}</div>`;
       if (lens === "mood") html += moodDetails(t.i, r);
+      if (lens === "air") html += airDetails(t.i, r);
       if (lens === "jobs" || (lens === "none" && b.kind !== "housing")) html += jobDetails(t.i, r);
       html += impactDetails(t.i, r);
       if (!fixed && canEdit()) html += `<div class="card-hint">Left-click raise, right-click lower</div>`;
@@ -1154,7 +1214,7 @@ function placeCard() {
   const below = links.length > 0 && cardTarget.kind === "block";
   const farRight = fit(p.x + 200, p.y - h / 2), farLeft = fit(p.x - w - 200, p.y - h / 2), high = fit(p.x - w / 2, p.y - h - 160);
   const order = below ? [under, right, left, above, farRight, farLeft, high] : [above, under, right, left, farRight, farLeft, high];
-  const panels = ["town", "meter", "postcard", "lenses"].map((id) => $(id)).filter((e) => !e.classList.contains("hidden") && e.offsetWidth).map((e) => e.getBoundingClientRect());
+  const panels = ["town", "meter", "postcard", "lenses", "viewpad"].map((id) => $(id)).filter((e) => !e.classList.contains("hidden") && e.offsetWidth).map((e) => e.getBoundingClientRect());
   // neighbor arc labels must stay visible too
   const labels = links.map((l) => world.linkLabelAt(l.from, l.to, l.tone === "work" ? 0.28 : 0.5)).filter((q): q is { x: number; y: number } => !!q);
   const hits = (c: { x: number; y: number }) =>
@@ -1385,7 +1445,7 @@ function layoutRight() {
   if (h === lastMeterH) return;
   lastMeterH = h;
   document.documentElement.style.setProperty("--lens-top", `${18 + h + 8}px`);
-  document.documentElement.style.setProperty("--pc-top", `${18 + h + 8 + 52 + 8}px`);
+  document.documentElement.style.setProperty("--pc-top", `${18 + h + 8 + 52 + 50}px`);
 }
 world.onFrame = () => { layoutRight(); placeCard(); placeBadges(); placeLinks(); tickClock(); };
 window.addEventListener("pointermove", (e) => { mouse = { x: e.clientX, y: e.clientY }; });
@@ -1393,9 +1453,10 @@ $("card").addEventListener("pointerenter", () => clearTimeout(hideTimer));
 $("card").addEventListener("pointerleave", () => { hideTimer = window.setTimeout(hideCard, 200); });
 
 document.addEventListener("click", (e) => {
-  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens],[data-size],[data-pick]");
+  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens],[data-size],[data-pick],[data-view]");
   if (!t) return;
   if (t.dataset.pick) { void playNew(t.dataset.pick as Size); return; }
+  if (t.dataset.view) return; // handled on pointerdown (with repeat)
   switch (t.dataset.act) {
     case "start": showScreen("size"); return;
     case "rules": showScreen("rules"); return;
@@ -1421,6 +1482,26 @@ document.addEventListener("click", (e) => {
 });
 $("build").addEventListener("click", () => (st.mode === "edit" ? void build() : keepBuilding()));
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") { st.tool = null; render(); } });
+
+// ---------- turn and tilt ----------
+const VIEW_STEP = { left: [0.35, 0], right: [-0.35, 0], up: [0, -0.16], down: [0, 0.16] } as const;
+function viewStep(dir: keyof typeof VIEW_STEP, k = 1) { const [a, p] = VIEW_STEP[dir]; world.cam.turnTilt(a * k, p * k); }
+let viewRepeat = 0;
+document.addEventListener("pointerdown", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("[data-view]");
+  if (!b) return;
+  const dir = b.dataset.view as keyof typeof VIEW_STEP;
+  viewStep(dir);
+  clearInterval(viewRepeat);
+  viewRepeat = window.setInterval(() => viewStep(dir, 0.35), 90);
+});
+for (const ev of ["pointerup", "pointercancel", "blur"]) window.addEventListener(ev, () => clearInterval(viewRepeat));
+window.addEventListener("keydown", (e) => {
+  if ((e.target as HTMLElement).closest?.("input,textarea") || e.metaKey || e.ctrlKey) return;
+  const k = e.key.toLowerCase();
+  const dir = k === "q" ? "left" : k === "e" ? "right" : k === "r" ? "up" : k === "f" ? "down" : null;
+  if (dir && st.pr && !document.body.classList.contains("titling")) { viewStep(dir, e.repeat ? 0.5 : 1); e.preventDefault(); }
+});
 
 void C;
 // Test hook for the screenshot script (?test): block screen positions.

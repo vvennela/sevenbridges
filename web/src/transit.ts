@@ -229,12 +229,20 @@ export class Transit {
         if (gaps[k]) continue; // a gap where the route meets unbridged water
         const a = path[k - 1], b = path[k];
         const d = norm(sub(b, a)), nn = v2(-d.y * wid, d.x * wid);
-        m.quad(w3(add(a, nn), y), w3(add(b, nn), y), w3(sub(b, nn), y), w3(sub(a, nn), y), c, [0, 1, 0]);
+        // follow the bridge deck where the route crosses the river (in small steps, so it arches)
+        const L = dist(a, b), steps = Math.max(1, Math.ceil(L / 0.12));
+        const yAt = (q: V2) => { const h = this.bridgeHeight(q); return h === null ? y : Math.max(y, h + 0.025); };
+        for (let j = 0; j < steps; j++) {
+          const p0 = add(a, mul(sub(b, a), j / steps)), p1 = add(a, mul(sub(b, a), (j + 1) / steps));
+          const y0 = yAt(p0), y1 = yAt(p1);
+          m.quad(w3(add(p0, nn), y0), w3(add(p1, nn), y1), w3(sub(p1, nn), y1), w3(sub(p0, nn), y0), c, [0, 1, 0]);
+        }
       }
       for (const [pk, p] of path.entries()) {
         if (gaps[pk] && gaps[pk + 1]) continue;
         const ring: ReturnType<typeof w3>[] = [];
-        for (let k = 0; k < 12; k++) { const t = (k / 12) * Math.PI * 2; ring.push(w3(add(p, v2(Math.cos(t) * wid, Math.sin(t) * wid)), y)); }
+        const yp = this.bridgeHeight(p) === null ? y : Math.max(y, this.bridgeHeight(p)! + 0.025);
+        for (let k = 0; k < 12; k++) { const t = (k / 12) * Math.PI * 2; ring.push(w3(add(p, v2(Math.cos(t) * wid, Math.sin(t) * wid)), yp)); }
         m.poly(ring, c, [0, 1, 0]);
       }
       return m.build();

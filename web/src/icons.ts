@@ -19,6 +19,7 @@ export const ICON = {
   bridge: () => svg(`<path d="M2 15h20v3H2z" fill="#C9A27E"/><path d="M3 15c3-6 15-6 18 0" fill="none" stroke="#D9CDB8" stroke-width="3"/><path d="M2 20c3 1 5-1 7 0s5 1 7 0 4-1 6 0" stroke="#8FD3EA" stroke-width="1.8" fill="none"/>`),
   check: () => svg(`<circle cx="12" cy="12" r="9" fill="#5FBF6A"/><path d="M7.5 12.3l3 3 6-6.3" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`),
   home: () => svg(`<path d="M4 11.2 12 4.5l8 6.7" fill="none" stroke="${C.ink}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 10v9h11v-9" fill="#FFE19A" stroke="${C.ink}" stroke-width="1.6" stroke-linejoin="round"/><rect x="10.5" y="14" width="3" height="5" fill="${C.coral}"/>`),
+  leaf: () => svg(`<path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14z" fill="#7FC9B0"/><path d="M5 19c4-4 7-7 10-10" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>`),
   sun: () => svg(`<circle cx="12" cy="12" r="4.6" fill="#FFC83D"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="#FFC83D" stroke-width="1.8" stroke-linecap="round"/>`),
   moon: () => svg(`<path d="M15.5 3.5a8.5 8.5 0 1 0 5 14.6A7 7 0 0 1 15.5 3.5z" fill="#B8C4F0"/>`),
   /** Productivity: a little factory-and-coin mark. */
