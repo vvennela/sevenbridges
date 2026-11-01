@@ -402,7 +402,7 @@ best plan of every level it returns.
 |---|---|---|---|---|---|---|---|
 | easy | 5 | 1–3 floors | 1 or 2 floors, plus 2 other heights of 1–5 | all 4 | 1–2 floors | 2 | up to 2 |
 | medium | 7 | 1–3 | 1 or 2 floors | 3 of 4 | 1–2 | 2 | 1 |
-| hard | 8 | 1–2 | 1 or 2 floors | 2 of 4 | 1 | 2 | 1 |
+| hard | 8 | 1–2 | 1 or 2 floors | 1 of 4 | 1 | 2 | 1 |
 
 Hard levels are 8 blocks, not 9: with 9 open blocks the proof took 2–10
 million steps (10–40 s).
@@ -426,11 +426,11 @@ Measured on this machine (12 cores), `node tools/timegen.mjs <binary>
 |---|---|---|
 | easy (5) | 2187, 1710, 1318, 574, 1131, 3502, 921, 1182, 1197 | 9 of 9 |
 | medium (7) | 8841, 2237, 1700, 2221, 1760, 6280, 3657, 6000, 7940 | 7 of 9 |
-| hard (8) | 7901, 2362, 4669, 7863, 5783, 1674, 7734, 7659, 8146 | 5 of 9 |
+| hard (8) | 7660, 706, 2667, 8673, 7086, 373, 615, 1593, 1223 (seeds 31–36, 41–43) | 8 of 9 |
 
 Every call took under 9 s (about 5 µs per step). A call that finds no
-level is retried by the bridge on a new map, up to 3 maps, so a hard level
-can take up to about 25 s.
+level is retried by the bridge on a new map, up to 3 maps (so up to about
+25 s in the rare worst case).
 
 **The search.** Transit choices are grouped by (routes, bridges); each group
 holds every station choice. The search splits each block's options (homes

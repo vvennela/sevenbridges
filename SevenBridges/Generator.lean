@@ -195,7 +195,7 @@ def Size.officeHeights : Size → Nat
 def Size.dropExtras : Size → Nat
   | .easy => 0
   | .medium => 1
-  | .hard => 2
+  | .hard => 3
 
 /-- Home heights a level of this size offers. -/
 def Size.homes : Size → List Building
