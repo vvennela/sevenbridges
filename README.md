@@ -57,6 +57,10 @@ cd tools && npm install && node timegen.mjs ../.lake/build/bin/sevenbridges
 | `solve_isSome` | If a puzzle has at most 3,000,000 candidates, the solver always returns a layout. |
 | `length_candidates`, `solveWork_le` | The solver scores exactly `candidateCount p` layouts, and never more than 3,000,000. |
 | `Generator.generate_work_le` | The generator scores at most 700,000 layouts in total. At the measured 3–10 µs per layout, that is under the 10-second budget. |
+| `Generator.next_injective`, `Generator.streams_differ` | The random number generator never maps two states to one, so different seeds give different random streams at every step. |
+| `Generator.rng_full_period` | From any seed, the generator visits all 2^64 states before it repeats (proven for any modulus 2^k). |
+| `Generator.below_fair`, `Generator.pick_mem`, `Generator.choose_spec` | `below n` gives each result for `2^31/n` or `2^31/n + 1` of the possible outputs; `pick` returns a list item; `choose` returns the first `k` items of a reordering of the list. |
+| `Generator.catTraits_same`, `Generator.population_traits` | A cat's traits depend only on the puzzle's seed, its groups, and the cat's home and number; the simulation uses exactly those traits. |
 
 Axioms used: `propext`, `Classical.choice`, `Quot.sound` only. No `sorry`, no
 `native_decide`.
@@ -73,6 +77,9 @@ Axioms used: `propext`, `Classical.choice`, `Quot.sound` only. No `sorry`, no
   the Lean definitions that code is compiled from.
 - **Time per layout.** The step bounds are proven. Turning steps into seconds
   uses a measured speed (`tools/timegen.mjs`).
+- **The starting seed.** It comes from the browser's cryptographic random
+  generator. Levels are random among those that pass the generator's
+  quality checks, not uniform over all maps (`SevenBridges/RandomProofs.lean`).
 - **Not trusted:** the map generator (`tools/genmap.mjs`), since Lean checks
   every map. The puzzle generator, since every puzzle it makes is solved by
   the proven solver. The frontend and bridge, since they only show what Lean
