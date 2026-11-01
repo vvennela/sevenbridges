@@ -40,4 +40,7 @@ elab "#spec_surface " id:ident : command => do
 #audit_axioms SevenBridges.rating_eq_100_iff
 #audit_axioms SevenBridges.length_candidates
 #audit_axioms SevenBridges.Generator.generate_work_le
+#audit_axioms SevenBridges.routeRush_maxLoad_le
+#audit_axioms SevenBridges.routeRush_all_off
+#audit_axioms SevenBridges.routeRush_boarded_add_leftBehind
 #spec_surface SevenBridges.solve_is_best

@@ -224,3 +224,15 @@ body.built .tray-gap { opacity: 0.5; }
 .ptype svg { width: 13px; height: 13px; }
 .ptype small { color: var(--ink-faint); font-weight: 600; }
 .who .of { color: var(--ink-faint); font-weight: 600; }
+.tile .needs { position: absolute; top: 4px; left: 4px; width: 22px; height: 22px; background: #fff; border-radius: 50%; box-shadow: 0 0 0 2px #2A7BC0; display: grid; place-items: center; }
+.tile .needs svg { width: 16px; height: 16px; }
+.tile.blocked.on { background: #EEF5FC; }
+.tile.blocked.on .led { background: #2A7BC0; box-shadow: none; }
+.newp { display: inline-flex; align-items: center; gap: 6px; }
+.sizes { display: inline-flex; background: #F3F1F9; border-radius: 10px; padding: 2px; }
+.size { border: none; background: none; font-size: 11.5px; font-weight: 700; color: var(--ink-soft); padding: 4px 7px; border-radius: 8px; }
+.size.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(46,58,89,.12); }
+.diff { font-size: 12px; font-weight: 700; color: var(--ink-faint); margin: -2px 0 4px; }
+.diff-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 6px; }
+.diff-row .diff { margin: 0; }
+.town h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

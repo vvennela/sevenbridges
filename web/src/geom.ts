@@ -59,6 +59,26 @@ export function inset(p: V2[], d: number): V2[] {
   });
 }
 
+/** Move each edge of a CCW polygon inward by its own distance ds[i] (edge i = p[i]→p[i+1]). */
+export function insetEdges(p: V2[], ds: number[]): V2[] {
+  const n = p.length;
+  return p.map((cur, i) => {
+    const pi = (i - 1 + n) % n;
+    const prev = p[pi], next = p[(i + 1) % n];
+    const e1 = norm(sub(cur, prev)), e2 = norm(sub(next, cur));
+    const n1 = v2(-e1.y, e1.x), n2 = v2(-e2.y, e2.x);
+    const d1 = ds[pi], d2 = ds[i];
+    // intersect the two offset lines: cur + n1*d1 + e1*s  and  cur + n2*d2 + e2*u
+    const a1 = add(cur, mul(n1, d1)), a2 = add(cur, mul(n2, d2));
+    const den = e1.x * e2.y - e1.y * e2.x;
+    if (Math.abs(den) < 1e-4) return add(cur, mul(n2, d2));
+    const s = ((a2.x - a1.x) * e2.y - (a2.y - a1.y) * e2.x) / den;
+    const q = add(a1, mul(e1, s));
+    // clamp very sharp corners
+    return dist(q, cur) > 3 * Math.max(d1, d2) ? add(cur, mul(norm(add(n1, n2)), Math.max(d1, d2))) : q;
+  });
+}
+
 /** Scale a polygon about a point. */
 export function scaleAbout(p: V2[], c: V2, k: number): V2[] {
   return p.map((q) => add(c, mul(sub(q, c), k)));

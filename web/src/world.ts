@@ -6,11 +6,11 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { MapCamera } from "./camera";
 import { GB, col, w3 } from "./builder";
 import { TILE_TOP, buildingHeight, fixedMarker, makeBuilding, tree, type LifeSpots, type Piece } from "./buildings";
-import { MAP_SCALE, add, ccw, centroid, dist, inset, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
+import { MAP_SCALE, add, ccw, centroid, dist, inset, insetEdges, mid, mul, norm, pointInPolygon, smoothClosed, sub, v2, type V2 } from "./geom";
 import { C } from "./palette";
 import { Rng, hashStr } from "./rng";
 import { Transit } from "./transit";
-import { bridgeMesh, buildRiver, type BridgeView } from "./river";
+import { RIVER_HALF, bridgeMesh, buildRiver, type BridgeView } from "./river";
 import type { Building, PuzzleReply } from "./types";
 
 const ROAD_W = 0.62;
@@ -186,8 +186,9 @@ export class World {
       const a = pts[s.a], b = pts[s.b];
       const ghost = bridgeMesh(a, b, true), real = bridgeMesh(a, b, false);
       real.visible = false;
-      const hit = new THREE.Mesh(new THREE.SphereGeometry(0.45, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
       hit.position.set((a.x + b.x) / 2, 0.15, -(a.y + b.y) / 2);
+      hit.scale.set(1, 1, 1);
       hit.userData.bridge = site;
       this.scene.add(ghost, real, hit);
       return { site, seg, a, b, ghost, real, hit };
@@ -200,7 +201,8 @@ export class World {
     this.adj = pz.map.blocks.map(() => []);
     for (const os of owners.values()) if (os.length === 2) { this.adj[os[0]].push(os[1]); this.adj[os[1]].push(os[0]); }
     pz.map.segments.forEach((s, i) => this.segOwners.set(i, owners.get(edgeKey(s.a, s.b)) ?? []));
-    this.blocks = pz.map.blocks.map((b, i) => this.makeBlock(i, ccw(b.corners.map((k) => pts[k])), pz.fixed[i] !== null));
+    const riverMids = pz.map.segments.filter((s) => s.terrain === "stream").map((s) => mid(pts[s.a], pts[s.b]));
+    this.blocks = pz.map.blocks.map((b, i) => this.makeBlock(i, ccw(b.corners.map((k) => pts[k])), pz.fixed[i] !== null, riverMids));
 
     const spots = new Map<number, V2>();
     for (const s of pz.stationSites) {
@@ -256,8 +258,10 @@ export class World {
     return pointInPolygon(q, P) ? q : b.center;
   }
 
-  private makeBlock(i: number, poly: V2[], fixed: boolean): BlockView {
-    const tilePoly = inset(poly, ROAD_W / 2 + 0.06);
+  private makeBlock(i: number, poly: V2[], fixed: boolean, riverMids: V2[] = []): BlockView {
+    // edges along the river give way to the wide waterway (render only)
+    const ds = poly.map((p, k) => { const q = mid(p, poly[(k + 1) % poly.length]); return riverMids.some((r) => dist(r, q) < 0.05) ? RIVER_HALF + 0.05 : ROAD_W / 2 + 0.06; });
+    const tilePoly = insetEdges(poly, ds);
     const center = centroid(tilePoly);
     const root = new THREE.Group();
     root.userData.block = i;
@@ -676,6 +680,18 @@ export class World {
       b.ghost.visible = !v;
     });
     this.bridgeOn = on.map(Boolean);
+    this.transit?.setBridged(this.bridges.filter((_b, k) => on[k]).map((b) => b.seg));
+  }
+
+  private bridgeTool = false;
+  private hoverBridge: number | null = null;
+  /** Unbuilt bridge sites: faint normally, clearer with the Bridge tool, strongest on hover. */
+  setBridgeTool(on: boolean) { this.bridgeTool = on; this.refreshBridgeGhosts(); }
+  private refreshBridgeGhosts() {
+    this.bridges.forEach((b, k) => {
+      const op = k === this.hoverBridge ? 0.7 : this.bridgeTool ? 0.5 : 0.16;
+      b.ghost.traverse((o) => { if (o instanceof THREE.Mesh) (o.material as THREE.MeshBasicMaterial).opacity = op; });
+    });
   }
 
   /** Lens links: a dotted arc between the two blocks joined by each built bridge. */
@@ -705,6 +721,9 @@ export class World {
     this.links = g;
   }
 
+  bridgeWalk(site: number) { const b = this.bridges[site]; if (b) this.transit?.bridgeWalk(b.seg); }
+  bridgeMid(site: number): V2 | null { const b = this.bridges[site]; return b ? v2((b.a.x + b.b.x) / 2, (b.a.y + b.b.y) / 2) : null; }
+
   /** The two blocks a bridge would join. */
   bridgeBlocks(site: number): number[] { return this.segOwners.get(this.bridges[site]?.seg ?? -1) ?? []; }
 
@@ -730,6 +749,8 @@ export class World {
     });
     this.transit?.setHoverRoute(h?.kind === "route" ? h.i : null);
     this.transit?.setHoverSite(h?.kind === "site" ? h.i : null);
+    this.hoverBridge = h?.kind === "bridge" ? h.i : null;
+    this.refreshBridgeGhosts();
   }
 
   /** A small shake: the click did nothing. */

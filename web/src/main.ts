@@ -19,7 +19,7 @@ import type { V2 } from "./geom";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-type Tool = Kind | "subway" | null;
+type Tool = Kind | "subway" | "bridge" | null;
 
 interface State {
   pr: PuzzleReply | null;
@@ -97,7 +97,8 @@ function mockPuzzle(pr: PuzzleReply) {
     }
   }
   for (const i of best) segs[i].terrain = "stream";
-  pz.bridgeSites = best.slice(0, 2);
+  // every river segment (Lean's own, if any, plus the mock ones) gets a bridge site
+  pz.bridgeSites = segs.map((s, i) => (s.terrain === "stream" ? i : -1)).filter((i) => i >= 0);
   pr.numbers.bridgeCost = 90;
   const T = [
     [{ name: "Gardeners", share: 50, cares: ["parks"], hates: [] }, { name: "Bookworms", share: 30, cares: ["quiet"], hates: ["nightlife"] }, { name: "Shoppers", share: 20, cares: ["shops"], hates: [] }],
@@ -153,6 +154,10 @@ async function refreshLive() {
   render();
 }
 
+const SIZES = ["easy", "medium", "hard"] as const;
+type Size = (typeof SIZES)[number];
+/** `?size=easy|medium|hard` (5 / 7 / 9 blocks) for new neighborhoods. */
+const wantedSize: Size = (() => { const s = new URLSearchParams(location.search).get("size"); return (SIZES as readonly string[]).includes(s ?? "") ? (s as Size) : "medium"; })();
 const wantedSeed = (() => {
   const s = new URLSearchParams(location.search).get("seed");
   return s !== null && /^\d+$/.test(s) ? Number(s) : null;
@@ -165,9 +170,9 @@ async function loadPuzzle(): Promise<PuzzleReply> {
   if (current.puzzle.name === `Neighborhood #${wantedSeed}`) return current;
   for (let seed = wantedSeed, tries = 0; tries < 3; seed++, tries++) {
     $("loading-text").textContent = "Planning a brand-new neighborhood…";
-    const g = await engine.newPuzzle(seed);
+    const g = await engine.newPuzzle(seed, wantedSize);
     if (g.generated && g.puzzle) {
-      if (seed !== wantedSeed) history.replaceState(null, "", `?seed=${seed}`);
+      if (seed !== wantedSeed) history.replaceState(null, "", `?seed=${seed}&size=${wantedSize}`);
       return g.puzzle;
     }
   }
@@ -303,6 +308,8 @@ const FIGHTS = new URLSearchParams(location.search).has("fights");
 /** `?crime`: debug flag, forces burglars on every built block (and the rare knockout). */
 const CRIME = new URLSearchParams(location.search).has("crime");
 
+let pickSize: Size = wantedSize;
+
 let edits = 0;
 function setBlock(i: number, b: Building) {
   st.build = st.build.map((x, k) => (k === i ? b : x));
@@ -319,7 +326,7 @@ function editBlock(i: number, up: boolean, useTool: boolean) {
   if (!canEdit()) return;
   if (st.pr!.puzzle.fixed[i]) { world.shake(i); toast("This block is already built"); return; }
   const cur = st.build[i];
-  const tool = useTool && st.tool && st.tool !== "subway" ? st.tool : null;
+  const tool = useTool && st.tool && st.tool !== "subway" && st.tool !== "bridge" ? st.tool : null;
   if (up) {
     if (tool === "empty") { if (cur.kind !== "empty") setBlock(i, emptyB()); return; }
     const kind = tool ?? cur.kind;
@@ -409,9 +416,10 @@ function render() {
   renderTray();
   renderPostcard();
   const s = shownSolution();
-  const open = s.build.map((_b, i) => (canEdit() && st.tool && st.tool !== "subway" && !st.pr!.puzzle.fixed[i] ? i : -1)).filter((i) => i >= 0);
+  const open = s.build.map((_b, i) => (canEdit() && st.tool && st.tool !== "subway" && st.tool !== "bridge" && !st.pr!.puzzle.fixed[i] ? i : -1)).filter((i) => i >= 0);
   world.setGlow(open);
-  world.transit?.setShowSites(canEdit() && (st.tool === "subway" || st.station === null));
+  world.transit?.setShowSites(canEdit() && st.tool === "subway");
+  world.setBridgeTool(canEdit() && st.tool === "bridge");
   updateLens();
   if (cardTarget) renderCard(cardTarget);
 }
@@ -431,8 +439,11 @@ function renderTown() {
       ${g.types?.length ? `<span class="types">${g.types.map((t) => `<span class="ptype" data-tip="${esc(t.name)}: ${t.cares.map((f) => `loves ${(FACTOR[f]?.name ?? f).toLowerCase()}`).concat(t.hates.map((f) => `dislikes ${(FACTOR[f]?.name ?? f).toLowerCase()}`)).join(", ")}">${t.cares[0] ? FACTOR_ICON[t.cares[0]] ?? "" : ""}${esc(t.name)} <small>${t.share}%</small></span>`).join("")}</span>` : ""}
     </div>`;
   }).join("");
-  setHTML("town", `<div class="town-head"><h1>${esc(pz.name)}</h1>
-      <button class="icon-btn" data-act="new" title="Try a new neighborhood">${ICON.dice()}</button></div>
+  const diff = wantedSeed !== null ? `${wantedSize[0].toUpperCase() + wantedSize.slice(1)} · ${pz.map.blocks.length} blocks` : `Demo · ${pz.map.blocks.length} blocks`;
+  setHTML("town", `<div class="town-head"><h1>${esc(pz.name)}</h1></div>
+    <div class="diff-row"><span class="diff">${diff}</span>
+      <span class="newp"><span class="sizes">${SIZES.map((s) => `<button class="size ${s === pickSize ? "on" : ""}" data-size="${s}" data-tip="New neighborhoods: ${s === "easy" ? "5" : s === "medium" ? "7" : "9"} blocks">${s[0].toUpperCase() + s.slice(1)}</button>`).join("")}</span>
+      <button class="icon-btn" data-act="new" title="Try a new neighborhood">${ICON.dice()}</button></span></div>
     <p class="goal">Make your residents happy and keep the town busy, within budget.</p>
     ${rows}`);
 }
@@ -505,13 +516,17 @@ function renderTray() {
   const nb = pr.numbers;
   const routes = shownSolution().routesOn;
   const station = shownSolution().station;
-  const bus = pr.puzzle.routes.map((r, i) => `<button class="tile small ${routes[i] ? "on" : ""}" data-route="${i}" ${editing ? "" : "disabled"}
+  const bus = pr.puzzle.routes.map((r, i) => `<button class="tile small ${routes[i] ? "on" : ""} ${world.transit?.routeBlocked(i) ? "blocked" : ""}" data-route="${i}" ${editing ? "" : "disabled"}
       data-tip="${esc(r.name)} bus: ${money(nb.routeCost)}. It needs ${nb.minRouteRiders}+ riders a day, ${nb.minNewRiders}+ of them new. Click to turn it ${routes[i] ? "off" : "on"}.">
-      <span class="tile-icon">${ICON.bus(ROUTE_COLORS[i % ROUTE_COLORS.length])}</span><span class="tile-name">${esc(r.name)}</span><span class="led"></span></button>`).join("");
+      <span class="tile-icon">${ICON.bus(ROUTE_COLORS[i % ROUTE_COLORS.length])}</span><span class="tile-name">${esc(r.name)}</span><span class="led"></span>${world.transit?.routeBlocked(i) ? `<span class="needs" data-tip="${esc(r.name)} crosses the river: it needs a bridge to run">${ICON.bridge()}</span>` : ""}</button>`).join("");
   const sub = pr.puzzle.stationSites.length ? `<button class="tile small ${station !== null ? "on" : ""} ${st.tool === "subway" ? "picked" : ""}" data-tool="subway" ${editing ? "" : "disabled"}
       data-tip="Subway station: ${money(nb.stationCost)}. It needs ${nb.minStationRiders}+ riders a day. Pick it, then click a faint entrance on the map.">
       <span class="tile-icon">${ICON.subway(SUBWAY_COLOR)}</span><span class="tile-name">Subway</span><span class="led"></span></button>` : "";
-  setHTML("transit", bus + sub);
+  const nBridge = st.bridges.filter(Boolean).length;
+  const bridgeTile = pr.puzzle.bridgeSites?.length ? `<button class="tile small ${nBridge ? "on" : ""} ${st.tool === "bridge" ? "picked" : ""}" data-tool="bridge" ${editing ? "" : "disabled"}
+      data-tip="Bridge${nb.bridgeCost !== undefined ? `: ${money(nb.bridgeCost)}` : ""}. Blocks across the river are neighbors only when a bridge joins them, and buses need one to cross. Pick it, then click a faint bridge on the river.">
+      <span class="tile-icon">${ICON.bridge()}</span><span class="tile-name">Bridge</span>${nb.bridgeCost !== undefined ? `<span class="tile-price">${money(nb.bridgeCost)}</span>` : `<span class="led"></span>`}</button>` : "";
+  setHTML("transit", bus + sub + bridgeTile);
   $("tray").dataset.hint = st.mode === "built" ? "Press Edit to change your plan" : "";
   const b = $<HTMLButtonElement>("build");
   b.classList.toggle("again", st.mode === "built");
@@ -822,7 +837,7 @@ function renderCard(t: Target) {
     const fixed = !!pr.puzzle.fixed[t.i];
     const cost = costOf(b);
     if (b.kind === "empty") {
-      const tool = st.tool && st.tool !== "subway" && st.tool !== "empty" ? st.tool : null;
+      const tool = st.tool && st.tool !== "subway" && st.tool !== "bridge" && st.tool !== "empty" ? st.tool : null;
       html = `<div class="card-title">Open lot</div>
         <div class="card-sub">${tool ? `Click to build ${KIND_NAME[tool].toLowerCase()} here` : "Pick a building below, then click here"}</div>`;
     } else {
@@ -864,6 +879,7 @@ function renderCard(t: Target) {
     html = `<div class="card-row"><span class="card-ic">${ICON.bus(ROUTE_COLORS[t.i % ROUTE_COLORS.length])}</span><div>
         <div class="card-title">${esc(r.name)} bus</div>
         <div class="card-sub">${money(nb.routeCost)}, needs ${nb.minRouteRiders} riders a day</div></div></div>
+      ${world.transit?.routeBlocked(t.i) ? `<div class="flag bad">This route crosses the river. It can't run until a bridge is built there.</div>` : ""}
       ${routeDetails(t.i, shownReply())}
       <div class="card-hint">${canEdit() ? `Click the route to turn it ${on ? "off" : "on"}` : on ? "Running" : "Not running"}</div>`;
   }
@@ -943,6 +959,7 @@ world.onClick = (t, button) => {
   if (!st.pr) return;
   if (!t) return;
   if (t.kind === "bridge" && button === 0) toggleBridge(t.i);
+  if (t.kind === "block" && st.tool === "bridge") return;
   if (t.kind === "block") editBlock(t.i, button === 0, true);
   else if (t.kind === "route" && button === 0) toggleRoute(t.i);
   else if (t.kind === "site" && button === 0) setStation(shownSolution().station === t.i ? null : t.i);
@@ -960,13 +977,14 @@ $("card").addEventListener("pointerenter", () => clearTimeout(hideTimer));
 $("card").addEventListener("pointerleave", () => { hideTimer = window.setTimeout(hideCard, 200); });
 
 document.addEventListener("click", (e) => {
-  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens]");
+  const t = (e.target as HTMLElement).closest<HTMLElement>("[data-tool],[data-route],[data-act],[data-lens],[data-size]");
   if (!t) return;
+  if (t.dataset.size) { pickSize = t.dataset.size as Size; lastHTML.delete("town"); renderTown(); return; }
   if (t.dataset.lens) { lens = t.dataset.lens as Lens; updateLens(); if (cardTarget) renderCard(cardTarget); }
   else if (t.dataset.tool) pickTool(t.dataset.tool as Tool);
   else if (t.dataset.route) toggleRoute(Number(t.dataset.route));
   else switch (t.dataset.act) {
-    case "new": location.search = `?seed=${Math.floor(Math.random() * 100000)}`; break;
+    case "new": location.search = `?seed=${Math.floor(Math.random() * 100000)}&size=${pickSize}`; break;
     case "keep": keepBuilding(); break;
     case "recenter": world.recenter(); break;
     case "close-pc": st.postcardOpen = false; render(); break;
@@ -993,8 +1011,14 @@ if (new URLSearchParams(location.search).has("test")) {
     counts: () => { const tr = world.transit as unknown as Record<string, { count: number }>; return { cigs: tr.cigs.count, beers: tr.beers.count, puffs: tr.puffs.count, dust: tr.dust.count }; },
     cigAt: () => { const tr = world.transit as unknown as Record<string, THREE.InstancedMesh>; const mm = new THREE.Matrix4(); tr.cigs.getMatrixAt(0, mm); const v = new THREE.Vector3().setFromMatrixPosition(mm); const pp = new THREE.Vector3(); tr.puffs.getMatrixAt(0, mm); pp.setFromMatrixPosition(mm); const sc = world.project({ x: v.x, y: -v.z }, v.y); const sp2 = world.project({ x: pp.x, y: -pp.z }, pp.y); return { scr: sc, pscr: sp2, cig: v.toArray(), puff: pp.toArray(), cam: world.camera.position.toArray(), vis: tr.cigs.visible, parent: !!tr.cigs.parent?.parent }; },
     crimeLook: (ci: number, d: number, e: number) => { const c = world.transit?.crimeAt[ci]; if (c) world.lookAt(c.p, d, e); return c ? { u: +c.u.toFixed(1), ko: c.ko } : null; },
+    blocked: () => (st.pr?.puzzle.routes ?? []).map((_r, i) => !!world.transit?.routeBlocked(i)),
+    lookBridge: (i: number, d: number, e: number) => { const p = world.bridgeMid(i); if (p) world.lookAt(p, d, e); },
+    dbgRiver: () => { const tr = world.transit as unknown as { stream: Set<number>; bridged: Set<number>; routeNodes: number[][]; segIndex: Map<string, number> }; return { stream: [...tr.stream], bridged: [...tr.bridged], sites: st.pr!.puzzle.bridgeSites, routes: tr.routeNodes, bridges: st.bridges }; },
+    setAllBridges: (on: boolean) => { st.bridges = st.bridges.map(() => on); world.setBridges(st.bridges); render(); },
     bridgeSites: () => (st.pr?.puzzle.bridgeSites ?? []).map((_s, i) => ({ i, p: world.screenOf({ kind: "bridge", i }) })),
     lookBlock: (i: number, d: number, e: number) => world.lookAt(world.centerOf(i), d, e),
+    bridgeWalk: (i: number) => world.bridgeWalk(i),
+    busOnBridge: () => !!world.transit?.busOnBridge(),
     demoWalk: (i: number) => world.transit?.demoWalk([world.edgePath(i)]),
     lens: (l: Lens) => { lens = l; updateLens(); },
     sites: () => (st.pr?.puzzle.stationSites ?? []).map((i) => ({ i, p: world.screenOf({ kind: "site", i }) })),

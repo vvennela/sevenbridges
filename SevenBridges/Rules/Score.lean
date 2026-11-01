@@ -1,4 +1,5 @@
 import SevenBridges.Rules.Puzzle
+import SevenBridges.Rules.Bus
 
 /-!
 # How a layout is scored: local rules, like Civilization (DESIGN.md §6)
@@ -64,6 +65,8 @@ structure Context where
   bridgeLinks : Array (List (Nat × Nat))
   /-- Blocks each route stops at. -/
   routeStops : Array (List Nat)
+  /-- Blocks each route stops at, in the order the bus reaches them. -/
+  routeStopOrder : Array (List Nat)
   /-- The bridges each route needs: the bridge sites on its path. -/
   routeBridges : Array (List Nat)
   /-- The route crosses the river where no bridge can be built, so it can never run. -/
@@ -88,6 +91,9 @@ def prepare (p : Puzzle) : Context :=
         i.val != j && (p.map.block i).sides.contains (bridgeSide k)
           && (p.map.block j).sides.contains (bridgeSide k)).map fun k => (j, k)
     routeStops := (p.routes.map stops).toArray
+    routeStopOrder := (p.routes.map fun r =>
+      let first (b : Nat) : Nat := (p.map.block b).corners.foldl (fun m x => min m (r.path.idxOf x)) r.path.length
+      (stops r).mergeSort fun a b => first a ≤ first b).toArray
     routeBridges := (p.routes.map fun r => bridges.filter fun k => r.sides.contains (bridgeSide k)).toArray
     routeBlocked := (p.routes.map fun r => r.sides.any fun side =>
       p.map.isRiver side && !bridges.any fun k => bridgeSide k == side).toArray
@@ -226,11 +232,16 @@ They are also the shop's customers. -/
 def workersFor (c : Context) (T : Transit) (look : Nat → Building) (j : Nat) : Nat :=
   (c.blocks.filter (T.canReach c j)).foldl (fun t h => t + (look h).residents) 0
 
-/-- Jobs filled on block `j`: all of them if the station reaches it, otherwise as
-many as there are workers who can reach it. -/
+/-- Outside workers the station brings to block `j`, if it reaches it: the jobs
+local workers leave open, but at most `stationWorkersPerBlock`. -/
+def stationWorkersAt (c : Context) (T : Transit) (look : Nat → Building) (j : Nat) : Nat :=
+  if T.stationReaches c j then min stationWorkersPerBlock ((look j).jobs - workersFor c T look j)
+  else 0
+
+/-- Jobs filled on block `j`: by workers who can reach it, as many as there are
+jobs, plus outside workers from the station. -/
 def jobsFilled (c : Context) (T : Transit) (look : Nat → Building) (j : Nat) : Nat :=
-  if T.stationReaches c j then (look j).jobs
-  else min (look j).jobs (workersFor c T look j)
+  min (look j).jobs (workersFor c T look j) + stationWorkersAt c T look j
 
 /-- Extra output of the office on block `j`, in percent: `officeBonusPerOffice`
 for each office next to it, at most `officeBonusMax`. Other buildings get
@@ -245,10 +256,13 @@ def blockProductivity (c : Context) (T : Transit) (look : Nat → Building) (j :
   jobWorth * jobsFilled c T look j * (100 + officeBonus c T look j) / 100
 
 /-- Sales on block `j`: for a shop, `saleWorth` per customer, up to
-`customersPerShopStory` per story. -/
+`customersPerShopStory` per story. Customers are residents next door or one
+bus ride away, plus, if the station reaches the shop, `shoppersPerShopStory`
+outside shoppers per story. -/
 def blockSales (c : Context) (T : Transit) (look : Nat → Building) (j : Nat) : Nat :=
   match look j with
-  | .shop h => saleWorth * min (customersPerShopStory * h.stories) (workersFor c T look j)
+  | .shop h => saleWorth * min (customersPerShopStory * h.stories)
+      (workersFor c T look j + if T.stationReaches c j then shoppersPerShopStory * h.stories else 0)
   | _ => 0
 
 /-- **The value of block `i`**: happiness + productivity + sales − crime. -/
@@ -257,11 +271,6 @@ def blockValue (c : Context) (T : Transit) (look : Nat → Building) (i : Nat) :
     - blockCrime c T look i
 
 /-! ## The neighborhood-wide penalty -/
-
-/-- Outside workers the station brings to block `j`: the jobs there that local
-workers don't fill. -/
-def stationWorkersAt (c : Context) (T : Transit) (look : Nat → Building) (j : Nat) : Nat :=
-  if T.stationReaches c j then (look j).jobs - min (look j).jobs (workersFor c T look j) else 0
 
 /-- More jobs than homes and subway workers: the size of the housing shortage. -/
 def shortage (c : Context) (T : Transit) (look : Nat → Building) : Nat :=
@@ -305,23 +314,56 @@ def stationRiders (c : Context) (T : Transit) (look : Nat → Building) : Nat :=
     if T.stationReaches c j then t + stationWorkersAt c T look j + shoppersAt (look j)
     else t) 0
 
-/-- Bus commuters, as (route, people) pairs. -/
-def busCommuters (c : Context) (T : Transit) (look : Nat → Building) : List (Nat × Nat) :=
-  c.blocks.flatMap fun h => (List.range c.typeCount).filterMap fun k =>
+/-- The block a commuter from block `h` rides route `r` to: the first block
+with jobs that `r` stops at. -/
+def jobStop (c : Context) (look : Nat → Building) (r h : Nat) : Nat :=
+  (c.blocks.find? fun j => j != h && c.stopsAt r j && (look j).jobs > 0).getD h
+
+/-- Who wants a bus in the morning rush, as (route, from block, to block,
+people): residents who ride to work (`commuteRoute`), and outside workers the
+station sends on to a block one bus ride away (on the first route that links
+them). -/
+def busTrips (c : Context) (T : Transit) (look : Nat → Building) : List (Nat × Nat × Nat × Nat) :=
+  let residents := c.blocks.flatMap fun h => (List.range c.typeCount).filterMap fun k =>
     let rt := c.residentType k
     let people := typeResidents (look h) rt
-    if people = 0 then none else (commuteRoute c T look rt.personality h).map (·, people)
+    if people = 0 then none else
+    (commuteRoute c T look rt.personality h).map fun r => (r, h, jobStop c look r h, people)
+  let outside := match T.station with
+    | none => []
+    | some k => c.blocks.filterMap fun j =>
+      if j != k && !T.isNeighbor c k j && stationWorkersAt c T look j > 0 then
+        ((T.routesOn c).find? fun r => c.stopsAt r k && c.stopsAt r j).map fun r =>
+          (r, k, j, stationWorkersAt c T look j)
+      else none
+  residents ++ outside
 
-/-- Riders on route `r`: bus commuters on it, plus station riders it carries to
-blocks one bus ride from the station. -/
+/-- The stops of route `r` in the order a bus meets them: direction 0 runs
+along the route's path, direction 1 runs back. -/
+def Context.stopsInOrder (c : Context) (r dir : Nat) : List Nat :=
+  let order := c.routeStopOrder.getD r []
+  if dir = 0 then order else order.reverse
+
+/-- The riders who wait for route `r` in direction `dir`: each bus trip on `r`
+whose job stop comes after its home stop in that direction. Stops are numbered
+along the way. -/
+def rushParties (c : Context) (T : Transit) (look : Nat → Building) (r dir : Nat) : List Rush.Party :=
+  let order := c.stopsInOrder r dir
+  (busTrips c T look).filterMap fun x =>
+    let (r', h, j, people) := x
+    let a := order.idxOf h
+    let b := order.idxOf j
+    if r' == r && a < b && b < order.length then some ⟨a, b, people⟩ else none
+
+/-- **The morning rush on route `r` in direction `dir`** (`Rules/Bus.lean`):
+`busesPerRush` buses of `busCapacity` seats each. -/
+def routeRush (c : Context) (T : Transit) (look : Nat → Building) (r dir : Nat) : Rush.State :=
+  Rush.run busCapacity busesPerRush (c.stopsInOrder r dir).length (rushParties c T look r dir)
+
+/-- Riders on route `r`: everyone who got on one of its buses in the morning
+rush, in both directions. Riders left behind don't count. -/
 def routeRiders (c : Context) (T : Transit) (look : Nat → Building) (r : Nat) : Nat :=
-  let commuters := ((busCommuters c T look).filter (·.1 == r)).foldl (· + ·.2) 0
-  let fromStation := match T.station with
-    | none => 0
-    | some k => c.blocks.foldl (fun t j =>
-        if j != k && !T.isNeighbor c k j && c.stopsAt r k && c.stopsAt r j
-        then t + stationWorkersAt c T look j else t) 0
-  commuters + fromStation
+  (routeRush c T look r 0).boarded + (routeRush c T look r 1).boarded
 
 /-! ## Costs -/
 
@@ -364,6 +406,25 @@ deriving Repr, DecidableEq, Inhabited
 structure RouteReport where
   on : Bool
   riders : Nat
+deriving Repr, DecidableEq, Inhabited
+
+/-- Riders getting on and off route `route` at block `block` in the morning
+rush (both directions). -/
+structure StopReport where
+  route : Nat
+  block : Nat
+  boardings : Nat
+  alightings : Nat
+deriving Repr, DecidableEq, Inhabited
+
+/-- The fullest load of one bus in the morning rush. `direction` 0 runs along
+the route's path, 1 runs back. -/
+structure BusReport where
+  route : Nat
+  direction : Nat
+  bus : Nat
+  maxLoad : Nat
+  capacity : Nat
 deriving Repr, DecidableEq, Inhabited
 
 /-- How one personality type of one resident group on one housing block is
@@ -423,6 +484,12 @@ structure Report where
   shortage : Nat
   routes : List RouteReport
   stationRiders : Nat
+  /-- Boardings and alightings at each stop of each route that runs. -/
+  stops : List StopReport
+  /-- The fullest load of each bus of each route that runs. -/
+  buses : List BusReport
+  /-- Riders still waiting after the last bus, on all routes. -/
+  leftBehind : Nat
   trips : List Trip
   /-- How each group on each housing block is doing, and why. -/
   residents : List ResidentReport
@@ -454,7 +521,7 @@ def tripsFor (c : Context) (s : Solution) : List Trip :=
     | none =>
       match commuteRoute c T look rt.personality h with
       | some r =>
-        let j := (c.blocks.find? fun j => j != h && c.stopsAt r j && hasJobs j).getD h
+        let j := jobStop c look r h
         some ⟨some gi, h, j, .bus, people, c.dist h j, [r]⟩
       | none =>
         let jobs := c.blocks.filter hasJobs
@@ -501,6 +568,27 @@ def blockReport (c : Context) (s : Solution) (i : Nat) : BlockReport :=
     groupImpact := (List.range c.groupCount).map fun gi =>
       ⟨gi, groupHappiness c s gi - groupHappiness c without gi⟩ }
 
+/-- Boardings and alightings at each stop of each route that runs. -/
+def stopReports (c : Context) (s : Solution) : List StopReport :=
+  (s.transit.routesOn c).flatMap fun r =>
+    let rush (dir : Nat) := routeRush c s.transit s.look r dir
+    let count (dir : Nat) (pick : Rush.State → List Nat) (b : Nat) : Nat :=
+      (pick (rush dir)).getD ((c.stopsInOrder r dir).idxOf b) 0
+    (c.stopsInOrder r 0).map fun b =>
+      { route := r, block := b, boardings := count 0 (·.ons) b + count 1 (·.ons) b
+        alightings := count 0 (·.offs) b + count 1 (·.offs) b }
+
+/-- The fullest load of each bus of each route that runs. -/
+def busReports (c : Context) (s : Solution) : List BusReport :=
+  (s.transit.routesOn c).flatMap fun r => [0, 1].flatMap fun dir =>
+    ((routeRush c s.transit s.look r dir).maxLoads.zip (List.range busesPerRush)).map fun (m, b) =>
+      { route := r, direction := dir, bus := b, maxLoad := m, capacity := busCapacity }
+
+/-- Riders still waiting after the last bus, on all routes that run. -/
+def leftBehindAll (c : Context) (s : Solution) : Nat :=
+  ((s.transit.routesOn c).map fun r =>
+    (routeRush c s.transit s.look r 0).leftBehind + (routeRush c s.transit s.look r 1).leftBehind).sum
+
 /-- The full report for a layout. -/
 def evaluateWith (c : Context) (s : Solution) : Report :=
   let p := c.puzzle
@@ -526,6 +614,9 @@ def evaluateWith (c : Context) (s : Solution) : Report :=
     shortage := shortage c T look
     routes := routeReports c s
     stationRiders := stationRiders c T look
+    stops := stopReports c s
+    buses := busReports c s
+    leftBehind := leftBehindAll c s
     trips := tripsFor c s
     residents
     blocks := c.blocks.map (blockReport c s)

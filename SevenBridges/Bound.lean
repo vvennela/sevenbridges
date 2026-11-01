@@ -265,17 +265,19 @@ over the neighbor mixes that can happen. -/
 def bestMood (c : Context) (info : BlockInfo) (b : Building) : Int :=
   if b.residents = 0 then 0 else maxOver (moodWith c b) info.eaches
 
-/-- The most productivity of building `b`: every job a worker could fill
-filled, with the biggest office bonus the neighbors could give. -/
+/-- The most productivity of building `b`: every job filled that the most local
+workers, plus outside workers if the station could reach it, could fill, with
+the biggest office bonus the neighbors could give. -/
 def jobsCap (info : BlockInfo) (b : Building) : Nat :=
-  let filled := if info.reached then b.jobs else min b.jobs info.workers
+  let filled := min b.jobs (info.workers + if info.reached then stationWorkersPerBlock else 0)
   let bonus := if b.isOffice then min officeBonusMax (officeBonusPerOffice * info.offices) else 0
   jobWorth * filled * (100 + bonus) / 100
 
 /-- The most sales of building `b`: every customer who could come, served. -/
 def salesCap (info : BlockInfo) (b : Building) : Nat :=
   match b with
-  | .shop h => saleWorth * min (customersPerShopStory * h.stories) info.workers
+  | .shop h => saleWorth * min (customersPerShopStory * h.stories)
+      (info.workers + if info.reached then shoppersPerShopStory * h.stories else 0)
   | _ => 0
 
 /-- The most block `k` can be worth with building `b` on it. -/
@@ -379,7 +381,7 @@ block and the ones after it (`next`) with `r` units of money. -/
 def knapsackRow (units : Nat) (opts : List (Int × Nat)) (next : Array Int) : Array Int :=
   Array.ofFn (n := units + 1) fun r =>
     opts.foldl (fun m x =>
-      if x.2 / 10 ≤ r.val then max m (x.1 + next.getD (r.val - x.2 / 10) impossible) else m)
+      if x.2 / 30 ≤ r.val then max m (x.1 + next.getD (r.val - x.2 / 30) impossible) else m)
       impossible
 
 /-- Best total cap when each block picks one option and the costs (in units of
@@ -390,7 +392,7 @@ def knapsack (vals : List (List (Int × Nat))) (units : Nat) : Int :=
 
 /-- The knapsack bound, from the blocks' (cap, cost) lists. -/
 def Plan.knapsackFrom (P : Plan) (vals : List (List (Int × Nat))) : Int :=
-  knapsack vals ((P.c.puzzle.budget - P.L.leastCost) / 10)
+  knapsack vals ((P.c.puzzle.budget - P.L.leastCost) / 30)
 
 /-- **Upper bound** on the score of every valid layout whose transit is one of
 `P.group` and where block `j` holds one of `opts j`: the most the caps can add
@@ -405,15 +407,17 @@ def leastBuildCost (p : Puzzle) (opts : List (List Building)) : Nat :=
 /-! ## Can the station still get enough riders? -/
 
 /-- The most daily station riders, for transit `T`, when block `j` holds one of
-`opts j`: on each block the station reaches, the most jobs that local workers
-can't fill (jobs minus the fewest workers), plus the most shoppers. -/
+`opts j`: on each block the station reaches, the most outside workers (the
+jobs the fewest local workers leave open, at most `stationWorkersPerBlock`),
+plus the most shoppers. -/
 def stationRidersCap (c : Context) (T : Transit) (opts : List (List Building)) : Nat :=
   if T.station.isNone then 0 else
   c.blocks.foldl (fun t j =>
     if T.stationReaches c j then
       let fewestWorkers := (c.blocks.filter (T.canReach c j)).foldl
         (fun t h => t + leastOf Building.residents (opts.getD h [.empty])) 0
-      t + (opts.getD j [.empty]).foldl (fun m b => max m (b.jobs - fewestWorkers + shoppersAt b)) 0
+      t + (opts.getD j [.empty]).foldl (fun m b =>
+        max m (min stationWorkersPerBlock (b.jobs - fewestWorkers) + shoppersAt b)) 0
     else t) 0
 
 /-- The station rule might still pass: for a plan with a single transit choice

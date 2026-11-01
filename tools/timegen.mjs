@@ -1,8 +1,11 @@
-// Times the Lean generator on random maps. Usage: node timegen.mjs <binary>
+// Times the Lean generator on random maps.
+// Usage: node timegen.mjs <binary> [blocks:seed ...]
 import { spawnSync } from "node:child_process";
 import { generateMap } from "./genmap.mjs";
 const bin = process.argv[2];
-for (const [seed, n] of [[1, 6], [2, 7], [3, 7], [4, 8], [5, 9], [6, 7], [8, 9], [9, 5]]) {
+const cases = process.argv.length > 3 ? process.argv.slice(3).map((x) => x.split(":").map(Number)).map(([n, s]) => [s, n])
+  : [[1, 6], [2, 7], [3, 7], [4, 8], [5, 9], [6, 7], [8, 9], [9, 5], [10, 5], [11, 7], [12, 9], [13, 7], [14, 9]];
+for (const [seed, n] of cases) {
   const m = generateMap(seed, n);
   const req = JSON.stringify({ cmd: "generate", map: { points: m.points, segments: m.segments, blocks: m.blocks }, routes: m.routes, seed });
   const t0 = Date.now();

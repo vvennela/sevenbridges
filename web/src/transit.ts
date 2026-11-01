@@ -30,9 +30,20 @@ const CAR_COLORS = ["#FF8B7B", "#9CCAF4", "#9FE2C6", "#CDB6F3", "#FFE19A", "#F7A
 
 export class Transit {
   private group = new THREE.Group();
-  private adj: { to: number; w: number }[][];
+  private adj: { to: number; w: number; seg: number }[][];
+  private segIndex = new Map<string, number>();
+  /** River segments, and the ones with a built bridge. */
+  private stream = new Set<number>();
+  private bridged = new Set<number>();
+  private routeNodes: number[][] = [];
+  private routeLane: number[] = [];
+  private routeGaps: boolean[][] = [];
+  private blockedAt: (V2 | null)[] = [];
+  private needSigns: THREE.Sprite[] = [];
   private routeMeshes: THREE.Mesh[] = [];
   private ribbonOf: ((wid: number) => void)[] = [];
+  private lastWidth: number[] = [];
+  private segEnds: [V2, V2][] = [];
   private widths: number[] = [];
   private routeHits: THREE.Mesh[] = [];
   private routePaths: V2[][] = [];
@@ -69,7 +80,9 @@ export class Transit {
   private legs!: THREE.InstancedMesh;
   private shoes!: THREE.InstancedMesh;
   /** Ground height under a plan point (set by the world). */
-  groundAt: (p: V2) => number = () => 0.02;
+  private baseGround: (p: V2) => number = () => 0.02;
+  get groundAt(): (p: V2) => number { return (p) => this.bridgeHeight(p) ?? this.baseGround(p); }
+  set groundAt(f: (p: V2) => number) { this.baseGround = f; }
   private cigs!: THREE.InstancedMesh;
   private beers!: THREE.InstancedMesh;
   private puffs!: THREE.InstancedMesh;
@@ -105,11 +118,14 @@ export class Transit {
   ) {
     scene.add(this.group);
     this.adj = pts.map(() => []);
-    for (const s of segs) {
+    segs.forEach((s, si) => {
       const w = dist(pts[s.a], pts[s.b]);
-      this.adj[s.a].push({ to: s.b, w });
-      this.adj[s.b].push({ to: s.a, w });
-    }
+      this.adj[s.a].push({ to: s.b, w, seg: si });
+      this.adj[s.b].push({ to: s.a, w, seg: si });
+      this.segIndex.set(segKey(s.a, s.b), si);
+      this.segEnds[si] = [pts[s.a], pts[s.b]];
+      if (s.terrain === "stream") this.stream.add(si);
+    });
     routes.forEach((r, i) => this.makeRoute(r, i));
     for (const [b, p] of stationSpots) this.makeSite(b, p);
 
@@ -174,18 +190,28 @@ export class Transit {
   private makeRoute(r: Route, i: number) {
     const n = this.routes.length;
     const lane = (i - (n - 1) / 2) * 0.2;
-    const path = offsetPolyline(r.path.map((k) => this.pts[k]), lane);
-    this.routePaths.push(path);
+    const path0 = offsetPolyline(r.path.map((k) => this.pts[k]), lane);
+    this.routePaths.push(path0);
+    this.routeNodes.push(r.path);
+    this.routeLane.push(lane);
+    const sign = textSprite("!", "#2A7BC0");
+    sign.scale.set(0.34, 0.34, 1);
+    sign.visible = false;
+    this.needSigns.push(sign);
+    this.group.add(sign);
     const color = ROUTE_COLORS[i % ROUTE_COLORS.length];
     const ribbon = (wid: number, y: number) => {
       const m = new GB();
       const c = col("#ffffff");
+      const path = this.routePaths[i], gaps = this.routeGaps[i] ?? [];
       for (let k = 1; k < path.length; k++) {
+        if (gaps[k]) continue; // a gap where the route meets unbridged water
         const a = path[k - 1], b = path[k];
         const d = norm(sub(b, a)), nn = v2(-d.y * wid, d.x * wid);
         m.quad(w3(add(a, nn), y), w3(add(b, nn), y), w3(sub(b, nn), y), w3(sub(a, nn), y), c, [0, 1, 0]);
       }
-      for (const p of path) {
+      for (const [pk, p] of path.entries()) {
+        if (gaps[pk] && gaps[pk + 1]) continue;
         const ring: ReturnType<typeof w3>[] = [];
         for (let k = 0; k < 12; k++) { const t = (k / 12) * Math.PI * 2; ring.push(w3(add(p, v2(Math.cos(t) * wid, Math.sin(t) * wid)), y)); }
         m.poly(ring, c, [0, 1, 0]);
@@ -206,8 +232,10 @@ export class Transit {
     // bus stops: a post with a round sign in the route color, at every other corner
     const stops = new THREE.Group();
     const sm = new GB();
+    const path = path0;
+    const wet = (k: number) => [k - 1, k + 1].some((j) => { const si = this.segIndex.get(segKey(r.path[k], r.path[j] ?? -1)); return si !== undefined && this.stream.has(si); });
     path.forEach((p, k) => {
-      if (k % 2 !== 0 && k !== path.length - 1) return;
+      if ((k % 2 !== 0 && k !== path.length - 1) || wet(k)) return; // no bus stop standing in the river
       const d = norm(sub(path[Math.min(path.length - 1, k + 1)], path[Math.max(0, k - 1)]));
       const q = add(p, mul(v2(-d.y, d.x), 0.3 * (i % 2 ? -1 : 1)));
       sm.geom(SHAPES.cyl, trs(q.x, 0.3, -q.y, 0.018, 0.6, 0.018), col("#F4F4F8"));
@@ -235,6 +263,7 @@ export class Transit {
 
   /** Ribbon width per route (the transit lens thickens busy routes). */
   setRouteWidths(w: number[]) {
+    this.lastWidth = [...w];
     w.forEach((x, i) => { if (this.widths[i] !== x) { this.widths[i] = x; this.ribbonOf[i]?.(x); } });
   }
 
@@ -249,7 +278,68 @@ export class Transit {
       mat.opacity = this.routesOn[i] ? 0.95 : i === this.hoverRoute ? 0.7 : 0.28;
     });
     this.stops.forEach((s, i) => { s.visible = !!this.routesOn[i] || i === this.hoverRoute; });
-    for (const b of this.buses) b.obj.visible = !!this.routesOn[b.route];
+    for (const b of this.buses) b.obj.visible = !!this.routesOn[b.route] && !this.blockedAt[b.route];
+    this.needSigns.forEach((s, i) => {
+      const at = this.blockedAt[i];
+      s.visible = !!at && (!!this.routesOn[i] || i === this.hoverRoute);
+      if (at) s.position.set(at.x, 0.55, -at.y);
+    });
+  }
+
+  /** Is a street segment usable (not river, or river with a built bridge)? */
+  private passable(seg: number) { return !this.stream.has(seg) || this.bridged.has(seg); }
+  /** Can this route run? (Lean also reports it as a problem when it can't.) */
+  routeBlocked(i: number): boolean { return !!this.blockedAt[i]; }
+
+  /** Which river segments have a built bridge. Routes over unbridged water stop, and get a gap and a sign. */
+  setBridged(segs: number[]) {
+    this.bridged = new Set(segs);
+    this.routeNodes.forEach((nodes, i) => {
+      let at: V2 | null = null;
+      const pts: V2[] = [], gaps: boolean[] = [];
+      nodes.forEach((k, j) => {
+        if (j > 0) {
+          const si = this.segIndex.get(segKey(nodes[j - 1], k));
+          if (si !== undefined && this.stream.has(si)) {
+            if (this.bridged.has(si)) { pts.pop(); gaps.pop(); for (const q of detour(this.pts[nodes[j - 1]], this.pts[k])) { pts.push(q); gaps.push(false); } return; }
+            else { if (!at) at = mid2(this.pts[nodes[j - 1]], this.pts[k]); pts.push(this.pts[k]); gaps.push(true); return; }
+          }
+        }
+        pts.push(this.pts[k]); gaps.push(false);
+      });
+      this.routePaths[i] = offsetPolyline(pts, this.routeLane[i]);
+      this.routeGaps[i] = gaps;
+      this.blockedAt[i] = at;
+      this.widths[i] = -1; // force the ribbon to rebuild with (or without) its gap
+    });
+    this.setRouteWidths(this.routeNodes.map((_n, i) => this.lastWidth[i] ?? 0.085));
+    this.refreshRoutes();
+  }
+
+  /** Deck height when standing on a built bridge (it arches along the segment), or null. */
+  bridgeHeight(p: V2): number | null {
+    for (const si of this.bridged) {
+      const sg = this.segEnds[si];
+      if (!sg) continue;
+      const { mid, d, n } = crossing(sg[0], sg[1]);
+      const across = (p.x - mid.x) * n.x + (p.y - mid.y) * n.y, along2 = (p.x - mid.x) * d.x + (p.y - mid.y) * d.y;
+      if (Math.abs(across) > BRIDGE_SPAN / 2 || Math.abs(along2) > BRIDGE_W / 2) continue;
+      return bridgeY(across / BRIDGE_SPAN + 0.5);
+    }
+    return null;
+  }
+
+  /** Street nodes to points; a leg along a bridged river segment detours bank-to-bank over the bridge. */
+  private nodePoints(nodes: number[]): V2[] {
+    const out: V2[] = [];
+    nodes.forEach((k, j) => {
+      if (j > 0) {
+        const si = this.segIndex.get(segKey(nodes[j - 1], k));
+        if (si !== undefined && this.stream.has(si) && this.bridged.has(si)) { out.pop(); out.push(...detour(this.pts[nodes[j - 1]], this.pts[k])); return; }
+      }
+      out.push(this.pts[k]);
+    });
+    return out;
   }
 
   /** Objects to raycast for route clicks. */
@@ -269,7 +359,8 @@ export class Transit {
     this.sites.set(block, { ghost, real, hit });
   }
 
-  get siteTargets(): THREE.Object3D[] { return [...this.sites.values()].map((s) => s.hit); }
+  /** Only markers you can see are clickable (the built station, or sites while the Subway tool is picked). */
+  get siteTargets(): THREE.Object3D[] { return [...this.sites.values()].filter((s) => s.ghost.visible || s.real.visible).map((s) => s.hit); }
 
   setStation(block: number | null) { this.station = block; this.refreshSites(); }
   setShowSites(show: boolean) { this.showSites = show; this.refreshSites(); }
@@ -278,7 +369,7 @@ export class Transit {
   private refreshSites() {
     for (const [b, s] of this.sites) {
       s.real.visible = b === this.station;
-      s.ghost.visible = b !== this.station && (this.showSites || b === this.hoverSite);
+      s.ghost.visible = b !== this.station && this.showSites;
       s.ghost.traverse((o) => {
         if (o instanceof THREE.Mesh && o.userData.fade !== false) (o.material as THREE.MeshStandardMaterial).opacity = b === this.hoverSite ? 0.9 : 0.5;
       });
@@ -308,6 +399,15 @@ export class Transit {
     const v = new THREE.Vector3().setFromMatrixPosition(mm);
     return [v2(v.x, -v.z)];
   }
+
+  /** Debug: cats walking back and forth over a bridge (screenshots). */
+  bridgeWalk(seg: number) {
+    const sg = this.segEnds[seg];
+    if (!sg) return;
+    this.demoWalk([detour(sg[0], sg[1]).slice(1, -1)]);
+  }
+  /** Debug: is any bus on a bridge deck right now? */
+  busOnBridge(): boolean { return this.buses.some((b) => b.obj.visible && b.obj.position.y > 0.2); }
 
   /** Debug (screenshots only): cats pacing back and forth from the road up onto a sidewalk. */
   demoWalk(paths: V2[][]) {
@@ -536,15 +636,15 @@ export class Transit {
         if (!route) continue;
         const board = this.nearestOnRoute(route.path, cur);
         const alight = this.nearestOnRoute(route.path, this.blockCorners[to]);
-        const w = [at, ...this.streetPath(cur, [route.path[board]]).map((k) => this.pts[k])];
+        const w = [at, ...this.nodePoints(this.streetPath(cur, [route.path[board]]))];
         leg(w, walk, true);
-        const ride = (board <= alight ? route.path.slice(board, alight + 1) : route.path.slice(alight, board + 1).reverse()).map((k) => this.pts[k]);
+        const ride = this.nodePoints(board <= alight ? route.path.slice(board, alight + 1) : route.path.slice(alight, board + 1).reverse());
         leg(ride, 1.3, false);
         at = this.pts[route.path[alight]];
         cur = [route.path[alight]];
       }
     }
-    leg([at, ...this.streetPath(cur, endAt.nodes).map((k) => this.pts[k]), end], walk, true);
+    leg([at, ...this.nodePoints(this.streetPath(cur, endAt.nodes)), end], walk, true);
     return legs;
   }
 
@@ -580,7 +680,7 @@ export class Transit {
       for (let i = 0; i < n; i++) if (!done[i] && d[i] < Infinity && (u < 0 || d[i] < d[u])) u = i;
       if (u < 0) break;
       done[u] = true;
-      for (const e of this.adj[u]) if (d[u] + e.w < d[e.to]) { d[e.to] = d[u] + e.w; prev[e.to] = u; }
+      for (const e of this.adj[u]) if (this.passable(e.seg) && d[u] + e.w < d[e.to]) { d[e.to] = d[u] + e.w; prev[e.to] = u; }
     }
     return { dist: d, prev };
   }
@@ -610,7 +710,7 @@ export class Transit {
       else if (u < 2 * run + pause) { s = L - (u - run - pause) * v; back = true; }
       const a = along(path, s);
       const dir = back ? mul(a.dir, -1) : a.dir;
-      b.obj.position.set(a.at.x, 0.05, -a.at.y);
+      b.obj.position.set(a.at.x, this.bridgeHeight(a.at) ?? 0.05, -a.at.y);
       b.obj.rotation.y = Math.atan2(dir.y, dir.x);
     }
 
@@ -1051,4 +1151,24 @@ function softDot(): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+const segKey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
+const mid2 = (a: V2, b: V2): V2 => v2((a.x + b.x) / 2, (a.y + b.y) / 2);
+/** Bridge geometry shared with river.ts: the deck spans the river, perpendicular to segment a→b. */
+export const BRIDGE_SPAN = 2.7, BRIDGE_W = 0.95;
+export const bridgeY = (t: number) => 0.17 + Math.sin(Math.max(0, Math.min(1, t)) * Math.PI) * 0.3;
+export function crossing(a: V2, b: V2) {
+  const d = norm(sub(b, a)), n = v2(-d.y, d.x);
+  return { mid: mid2(a, b), d, n };
+}
+/** The way over: from one end of the river segment to the bank, across the bridge, and on. */
+/** Distance from the river's centre line to the bank lane. */
+export const BANK_LANE = 1.0;
+/** The way over, replacing the river leg a→b: along the near bank lane, over the deck, along the far bank lane. */
+function detour(a: V2, b: V2): V2[] {
+  const { mid, n } = crossing(a, b);
+  const e0 = add(mid, mul(n, -BANK_LANE)), e1 = add(mid, mul(n, BANK_LANE));
+  const steps = [0.2, 0.35, 0.5, 0.65, 0.8].map((u) => add(e0, mul(sub(e1, e0), u)));
+  return [add(a, mul(n, -BANK_LANE)), e0, ...steps, e1, add(b, mul(n, BANK_LANE))];
 }

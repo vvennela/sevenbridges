@@ -167,10 +167,19 @@ def rootJobs (p : Puzzle) : List Job :=
     { P := makePlan c moods Ts, exacts := Ts.map (makePlan c moods [·]), steps := searchSteps p,
       opts := p.choices }
 
+/-- Split every piece at its first step, `n` times over. -/
+def expandTimes : Nat → List Job → List Job
+  | 0, js => js
+  | n + 1, js => expandTimes n (js.flatMap Job.expand)
+
+/-- How many times the search is split into smaller pieces, so that the
+pieces can be shared fairly between cores. -/
+def splitDepth : Nat := 6
+
 /-- The search, cut into pieces: one per group of transit choices, each split
 at its first two steps, most promising first. -/
 def jobs (p : Puzzle) : List Job :=
-  let pieces := ((rootJobs p).flatMap Job.expand).flatMap Job.expand
+  let pieces := expandTimes splitDepth (rootJobs p)
   ((pieces.map fun j => (j, j.P.bound j.opts)).mergeSort (fun x y => x.2 ≥ y.2)).map (·.1)
 
 /-- Run the pieces one after another. -/
@@ -183,11 +192,89 @@ def runInTurn (keep : Solution → Bool) (js : List Job) (start : Search) : Sear
 /-- The better of two search results (the first on a tie). -/
 def Search.better (a b : Search) : Search := if b.bestScore > a.bestScore then b else a
 
-/-- Run the pieces at the same time, each with an equal share of the fuel and
-the same starting best. The fuel left is 0 if any piece ran out. -/
-def runTogether (keep : Solution → Bool) (js : List Job) (start : Search) : Search :=
-  let share := start.fuel / js.length
-  let tasks := js.map fun j => Task.spawn fun _ => j.run keep { start with fuel := share, steps := 0 }
+/-- Hand `h` of `k` when dealing pieces like cards: the pieces whose number
+is `h` modulo `k`. -/
+def hand {α : Type} (k : Nat) (js : List α) (h : Nat) : List α :=
+  ((js.zip (List.range js.length)).filter (·.2 % k == h)).map (·.1)
+
+/-- Deal the pieces into `k` hands, like cards: piece number `i` goes to hand
+`i % k`. -/
+def deal {α : Type} (k : Nat) (js : List α) : List (List α) :=
+  (List.range k).map (hand k js)
+
+/-- Hands the parallel search deals the pieces into. -/
+def hands : Nat := 12
+
+/-- Run hands of pieces at the same time, each hand one piece after another,
+with an equal share of the fuel and the same starting best. The fuel left is 0
+if any hand ran out. -/
+def combineHands (start : Search) (share : Nat) (results : List Search) : Search :=
+  let _ := share
+  let used := results.foldl (fun t r => t + r.steps) 0
+  let best := results.foldl Search.better start
+  { best := best.best, bestScore := best.bestScore, steps := start.steps + used
+    fuel := if results.all (·.fuel > 0) then start.fuel - used else 0 }
+
+/-! ### Fresh copies for the parallel search
+
+Each core works on its own copy of the puzzle's buildings. Sharing them between
+threads makes every core wait on the same memory. The copy equals the original
+(`Puzzle.fresh_eq`); it only changes where the data lives. -/
+
+/-- A number for each building (for copying). -/
+@[noinline] def Building.code : Building → Nat
+  | .empty => 0
+  | .park => 1
+  | .bar => 2
+  | .housing h => 3 + h.stories
+  | .office h => 6 + h.stories
+  | .shop h => 9 + h.stories
+
+/-- The building with a number (for copying). -/
+@[noinline] def Building.ofCode : Nat → Building
+  | 1 => .park
+  | 2 => .bar
+  | 4 => .housing .one
+  | 5 => .housing .two
+  | 6 => .housing .three
+  | 7 => .office .one
+  | 8 => .office .two
+  | 9 => .office .three
+  | 10 => .shop .one
+  | 11 => .shop .two
+  | 12 => .shop .three
+  | _ => .empty
+
+theorem Building.ofCode_code (b : Building) : Building.ofCode b.code = b := by
+  cases b <;> (try rename_i h; cases h) <;> rfl
+
+/-- The puzzle itself; the extra argument makes each task make its own copy. -/
+@[noinline] def Puzzle.withUnit (_ : Unit) (p : Puzzle) : Puzzle := p
+
+/-- A copy of the puzzle with its own building values. -/
+def Puzzle.fresh (u : Unit) (p : Puzzle) : Puzzle :=
+  let p := p.withUnit u
+  { p with allowed := p.allowed.map (fun b => Building.ofCode b.code)
+           fixed := p.fixed.map (·.map fun b => Building.ofCode b.code) }
+
+theorem Puzzle.fresh_eq (u : Unit) (p : Puzzle) : p.fresh u = p := by
+  have h : (fun b => Building.ofCode b.code) = id := funext Building.ofCode_code
+  simp [Puzzle.fresh, Puzzle.withUnit, h]
+
+/-- Run all pieces of the search in `hands` hands at the same time, each on its
+own core and its own copy of the puzzle, each hand one piece after another,
+with an equal share of the fuel and the same starting best. The fuel left is 0
+if any hand ran out. -/
+def runTogether (keep : Solution → Bool) (p : Puzzle) (start : Search) : Search :=
+  let share := start.fuel / hands
+  let tasks := (List.range hands).map fun h => Task.spawn (prio := .dedicated) fun u =>
+    runInTurn keep (hand hands (jobs (p.fresh u)) h) { start with fuel := share, steps := 0 }
+  combineHands start share (tasks.map Task.get)
+
+/-- The same as `runTogether`, one hand after another, for the proofs. -/
+def runHands (keep : Solution → Bool) (hs : List (List Job)) (start : Search) : Search :=
+  let share := start.fuel / hs.length
+  let tasks := hs.map fun h => Task.spawn fun _ => runInTurn keep h { start with fuel := share, steps := 0 }
   let results := tasks.map Task.get
   let used := results.foldl (fun t r => t + r.steps) 0
   let best := results.foldl Search.better start
@@ -195,16 +282,16 @@ def runTogether (keep : Solution → Bool) (js : List Job) (start : Search) : Se
     fuel := if results.all (·.fuel > 0) then start.fuel - used else 0 }
 
 /-- Steps for the first, quick pass that looks for a good starting layout. -/
-def quickFuel : Nat := 200000
+def quickFuel : Nat := 50000
 
 /-- Search everything, from state `start`: first one piece after another with
-a little fuel (often enough to finish); if that runs out, all pieces at the
-same time from the best layout found so far. -/
+a little fuel (often enough to finish); if that runs out, all pieces again, in
+`hands` hands at the same time, from the best layout found so far. -/
 def searchAll (p : Puzzle) (keep : Solution → Bool) (start : Search) : Search :=
   let js := jobs p
   let quick := runInTurn keep js { start with fuel := min quickFuel start.fuel }
   if quick.fuel > 0 then { quick with fuel := start.fuel - (quick.steps - start.steps) }
-  else runTogether keep js { quick with fuel := start.fuel - (quick.steps - start.steps) }
+  else runTogether keep p { quick with fuel := start.fuel - (quick.steps - start.steps) }
 
 /-! ## A good first guess -/
 
@@ -250,7 +337,7 @@ def solveWithFuel (p : Puzzle) (fuel : Nat) : Search :=
   searchAll p (fun _ => true) (startSearch p fuel)
 
 /-- Fuel for one solve. -/
-def searchFuel : Nat := 3000000
+def searchFuel : Nat := 12000000
 
 /-- **The solver**: the best valid layout, or `none` if it ran out of fuel. -/
 def solve (p : Puzzle) : Option Solution :=

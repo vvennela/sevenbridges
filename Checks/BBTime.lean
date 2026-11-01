@@ -30,7 +30,7 @@ def searchPolished (p : Puzzle) (qf : Nat) (start : Search) : Search :=
   if quick.fuel > 0 then quick else
   let c := prepare p
   let (b, v) := (List.range 4).foldl (fun sv _ => improveOnce c sv) (quick.best, quick.bestScore)
-  runTogether (fun _ => true) js { quick with best := b, bestScore := v, fuel := start.fuel - quick.steps }
+  runTogether (fun _ => true) p { quick with best := b, bestScore := v, fuel := start.fuel - quick.steps }
 
 def main (args : List String) : IO Unit := do
   let _ ← timeIt "oldHarbor" Demo.oldHarbor

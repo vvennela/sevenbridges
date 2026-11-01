@@ -3,7 +3,9 @@ import SevenBridges.Rules.Buildings
 import SevenBridges.Rules.Culture
 import SevenBridges.Rules.Puzzle
 import SevenBridges.Rules.Score
+import SevenBridges.Rules.Bus
 import SevenBridges.Rules.Valid
+import SevenBridges.BusProofs
 import SevenBridges.Solver
 import SevenBridges.Proofs
 import SevenBridges.Demo

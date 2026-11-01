@@ -84,7 +84,7 @@ def routeBuildCost : Nat := 50
 /-- Cost to run a bus route for a year. -/
 def routeYearlyCost : Nat := 10
 /-- Cost to build the subway station. -/
-def stationBuildCost : Nat := 250
+def stationBuildCost : Nat := 100
 /-- Cost to run the subway station for a year. -/
 def stationYearlyCost : Nat := 15
 /-- Cost to build a bridge. -/
@@ -95,13 +95,19 @@ def fare : Nat := 2
 /-- Cost to run a bus route for a day, in dollars. -/
 def routeDailyCost : Nat := 60
 /-- Cost to run the station for a day, in dollars. -/
-def stationDailyCost : Nat := 120
+def stationDailyCost : Nat := 80
 
+/-- Buses each route runs in each direction in the morning rush. -/
+def busesPerRush : Nat := 3
+/-- Seats on a bus. -/
+def busCapacity : Nat := 15
 /-- Riders a day a route needs to pay for itself: daily cost ÷ fare, rounded up. -/
 def minRouteRiders : Nat := (routeDailyCost + fare - 1) / fare
 /-- Riders a day the station needs to pay for itself. -/
 def minStationRiders : Nat := (stationDailyCost + fare - 1) / fare
 
+/-- Most outside workers the station brings to one block. -/
+def stationWorkersPerBlock : Nat := 20
 /-- Outside shoppers a station brings for each shop story within its reach. -/
 def shoppersPerShopStory : Nat := 10
 
