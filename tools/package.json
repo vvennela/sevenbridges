@@ -1,0 +1,2 @@
+{ "name": "sevenbridges-tools", "private": true, "type": "module",
+  "dependencies": { "d3-delaunay": "6.0.4" } }

@@ -1,0 +1,40 @@
+// r18: three zoom levels, plus bar and home-yard close-ups.
+import { chromium } from "playwright";
+const out = process.argv[2] ?? "/tmp/sb-shots/r18";
+const browser = await chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.on("pageerror", (e) => console.log("[pageerror]", e.message));
+await page.goto(`http://localhost:5173/?nocoach&test`);
+await page.waitForSelector("#loading.gone", { timeout: 90000 });
+await page.waitForTimeout(6000);
+const blocks = () => page.evaluate(() => window.__sb.blocks());
+const open = (await blocks()).filter((b) => !b.fixed && b.p);
+const place = async (tool, b, times = 1) => { await page.locator(`[data-tool='${tool}']`).click(); for (let k = 0; k < times; k++) await page.mouse.click(b.p.x, b.p.y + 20); await page.waitForTimeout(150); };
+await place("housing", open[0], 2);
+await place("bar", open[1]);
+await place("housing", open[2], 3);
+if (open[3]) await place("park", open[3]);
+await page.mouse.move(700, 30);
+await page.click("#build");
+await page.waitForSelector(".pc-head", { timeout: 60000 });
+await page.click("[data-act='close-pc']");
+await page.mouse.move(1435, 450);
+await page.waitForTimeout(2500);
+await page.screenshot({ path: `${out}-far.png` });
+const wheel = (o) => page.evaluate((o) => { const el = document.querySelector("#scene canvas"); el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: 720, clientY: 450, ...o })); }, o);
+for (let k = 0; k < 12; k++) await wheel({ deltaY: -10, ctrlKey: true });
+await page.waitForTimeout(1500);
+await page.screenshot({ path: `${out}-default.png` });
+for (let k = 0; k < 40; k++) await wheel({ deltaY: -10, ctrlKey: true });
+await page.waitForTimeout(1500);
+await page.screenshot({ path: `${out}-near.png` });
+for (const kind of ["beer", "cig"]) {
+  await page.evaluate((kind) => window.__sb.propLook(kind, 2.4, 0.9), kind);
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${out}-${kind === "beer" ? "bar" : "smoker"}.png` });
+}
+const home = (await blocks()).find((b) => b.kind === "housing");
+await page.evaluate((i) => window.__sb.lookBlock(i, 6.2, 0.62), home.i);
+await page.waitForTimeout(1800);
+await page.screenshot({ path: `${out}-yard.png` });
+await browser.close();

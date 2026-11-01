@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seven Bridges</title>
+  </head>
+  <body>
+    <div id="scene"></div>
+    <div id="hud">
+      <section id="town" class="town"></section>
+      <section id="meter" class="meter"></section>
+      <div id="lenses" class="lenses"></div>
+      <div id="badges" class="badges"></div>
+      <nav id="tray" class="tray">
+        <div id="tools" class="tools"></div>
+        <div class="tray-gap"></div>
+        <div id="transit" class="tools"></div>
+        <button id="build" class="build"><span class="build-label">Build</span></button>
+      </nav>
+      <div id="card" class="card hidden"></div>
+      <aside id="postcard" class="postcard hidden"></aside>
+      <div id="coach" class="coach hidden"></div>
+      <div id="toast" class="toast hidden"></div>
+      <div id="loading" class="loading">
+        <div class="loading-house"></div>
+        <div id="loading-text">Setting up the neighborhood…</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+name = "sevenbridges"
+version = "0.1.0"
+defaultTargets = ["SevenBridges", "sevenbridges"]
+
+[[lean_lib]]
+name = "SevenBridges"
+
+[[lean_exe]]
+name = "sevenbridges"
+root = "Main"
+
+[[lean_exe]]
+name = "bbtime"
+root = "Checks.BBTime"
+
+[[lean_exe]]
+name = "ratingdist"
+root = "Checks.RatingDist"
+
+[[lean_exe]]
+name = "difftest"
+root = "Checks.Diff"
