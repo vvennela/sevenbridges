@@ -202,7 +202,8 @@ export class Music {
   playing = false;
   volume = Number(localStorage.getItem("sb-music-vol") ?? "0.6");
   /** The player turned the music off (remembered). */
-  muted = localStorage.getItem("sb-music-on") === "0";
+  // on by default on every visit; the choice lasts for this tab only (an old localStorage "off" is ignored)
+  muted = sessionStorage.getItem("sb-music-on") === "0";
   onChange: () => void = () => {};
 
   get track(): Track { return TRACKS[this.index]; }
@@ -242,7 +243,7 @@ export class Music {
     const ctx = this.ctx!;
     void ctx.resume();
     this.muted = false;
-    localStorage.setItem("sb-music-on", "1");
+    sessionStorage.setItem("sb-music-on", "1");
     if (!this.playing) {
       this.playing = true;
       const now = ctx.currentTime;
@@ -258,7 +259,7 @@ export class Music {
     if (!this.ctx || !this.playing) return;
     this.playing = false;
     this.muted = true;
-    localStorage.setItem("sb-music-on", "0");
+    sessionStorage.setItem("sb-music-on", "0");
     const now = this.ctx.currentTime, ctx = this.ctx;
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
@@ -330,9 +331,10 @@ export function musicPill(host: HTMLElement, music: Music) {
   const render = () => {
     name.textContent = music.track.name;
     name.title = music.track.name;
-    toggle.innerHTML = icon(!music.playing);
-    el.classList.toggle("on", music.playing);
-    el.dataset.state = music.playing ? "on" : music.muted ? "off" : "ready";
+    toggle.innerHTML = icon(music.muted);
+    // "on" until the player turns it off (it starts sounding with the first touch or key)
+    el.classList.toggle("on", !music.muted);
+    el.dataset.state = music.muted ? "off" : "on";
   };
   music.onChange = render;
   render();
@@ -340,17 +342,21 @@ export function musicPill(host: HTMLElement, music: Music) {
     const b = (e.target as HTMLElement).closest<HTMLElement>("[data-mu]");
     if (!b) return;
     e.stopPropagation();
-    if (b.dataset.mu === "toggle") music.toggle();
+    // the same tap that just started the music (first touch on the page) shouldn't stop it again
+    if (b.dataset.mu === "toggle") { if (performance.now() - startedAt > 600) music.toggle(); }
     else music.next();
   });
   const paintVol = () => vol.style.setProperty("--v", `${Math.round(Number(vol.value) * 100)}%`);
   paintVol();
   vol.addEventListener("input", () => { music.setVolume(Number(vol.value)); paintVol(); });
   // autoplay rules: the music starts with the first click anywhere (unless the player turned it off)
-  const first = () => { if (!music.muted && !music.playing) music.play(); };
-  window.addEventListener("pointerdown", first, { once: true, capture: true });
-  window.addEventListener("keydown", first, { once: true, capture: true });
+  let startedAt = -1e9;
+  const first = () => { if (!music.muted && !music.playing) { music.play(); startedAt = performance.now(); } };
+  const evs = ["pointerdown", "touchstart", "click", "keydown"] as const;
+  const once = () => { first(); if (music.playing) for (const ev of evs) window.removeEventListener(ev, once, true); };
+  for (const ev of evs) window.addEventListener(ev, once, { capture: true });
   // also try right away (works where autoplay is allowed)
   if (!music.muted) try { music.play(); } catch { /* blocked until a click */ }
   return el;
 }
+
