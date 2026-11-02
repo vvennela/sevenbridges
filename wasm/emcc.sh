@@ -12,7 +12,7 @@
 set -euo pipefail
 W=${W:-/work}
 J=${JOBS:-$(nproc)}
-OPT=${OPT:--O3}
+OPT=${OPT:--O3 -flto}
 cd "$W"
 mkdir -p gen/lean out
 
@@ -82,7 +82,7 @@ link() {
     -o out/sevenbridges.mjs -Wl,-error-limit=0 \
     -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker,node \
     -sEXPORTED_FUNCTIONS=_sb_init,_sb_request -sEXPORTED_RUNTIME_METHODS=ccall,UTF8ToString \
-    -sSTACK_SIZE=${STACK:-64MB} -sINITIAL_MEMORY=${MEM:-256MB} -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB \
+    -sSTACK_SIZE=${STACK:-32MB} -sINITIAL_MEMORY=${MEM:-64MB} -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB \
     -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXIT_RUNTIME=0 -sFILESYSTEM=1
 }
 : > roots.txt; rm -f xobjs.txt

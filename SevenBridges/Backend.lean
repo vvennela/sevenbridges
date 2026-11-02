@@ -14,6 +14,12 @@ Requests:
 - `{"cmd": "solve"}`: the proven best layout.
 - `{"cmd": "generate", "map": …, "routes": […], "seed": n}`: make a new puzzle
   on a map from `tools/genmap.mjs`, and make it the current puzzle.
+- `{"cmd": "export"}`: the current puzzle with every field (the `puzzle` reply
+  leaves out some group fields that the frontend does not use), for `load`.
+- `{"cmd": "load", "puzzle": …, "best": …, "bestScore": n}`: make a town made
+  ahead of time (by `generate`, `solve` and `export`, see `wasm/make-pack.mjs`)
+  the current puzzle, with its best layout, without solving again. Accepted only
+  if that layout is valid for the town and scores exactly `bestScore`.
 -/
 
 open Lean SevenBridges
@@ -47,6 +53,16 @@ def reportJson (p : Puzzle) (s : Solution) : Json :=
     ("problems", toJson (problems p s)),
     ("score", r.score),
     ("report", toJson r)]
+
+/-- A group with every field, so that `fromJson?` gives back the same group. -/
+def groupFullJson (g : Group) : Json := Json.mkObj [
+  ("name", g.name), ("share", g.share), ("types", toJson g.types), ("works", g.works),
+  ("studies", g.studies), ("drives", g.drives), ("buses", g.buses), ("eatsOut", g.eatsOut),
+  ("goesOut", g.goesOut)]
+
+/-- A puzzle with every field, so that `fromJson?` gives back the same puzzle. -/
+def puzzleFullJson (p : Puzzle) : Json :=
+  (toJson p).setObjVal! "groups" (Json.arr (p.groups.map groupFullJson).toArray)
 
 /-- The current puzzle and, once known, its proven best layout. -/
 structure Game where
@@ -109,6 +125,20 @@ def handle (g : Game) (req : Json) : Except String (Json × Game) := do
           ("bestScore", v.bestScore)]),
         ("puzzle", puzzleJson q)], { puzzle := q, best := some (some v.best) })
     | _, _ => return (Json.mkObj [("generated", false), ("info", info), ("seed", seed)], g)
+  | "export" => return (Json.mkObj [("puzzle", puzzleFullJson p)], g)
+  | "load" =>
+    let q ← req.getObjValAs? Puzzle "puzzle"
+    let b ← req.getObjValAs? Solution "best"
+    let bestScore ← req.getObjValAs? Int "bestScore"
+    let problems := q.map.problems
+    if !problems.isEmpty then throw s!"bad map: {problems}"
+    if !decide (Valid q b) then throw "the stored best layout is not valid for this town"
+    if score q b != bestScore then
+      throw s!"the stored best layout scores {score q b}, not {bestScore}"
+    return (Json.mkObj [("loaded", true),
+        ("verified", Json.mkObj [("theorem", "SevenBridges.solve_is_best"), ("simSeed", q.simSeed),
+          ("bestScore", bestScore)]),
+        ("puzzle", puzzleJson q)], { puzzle := q, best := some (some b) })
   | c => throw s!"unknown command {c}"
 
 /-- Answer one request line. Returns the reply line and the game state after it. -/
