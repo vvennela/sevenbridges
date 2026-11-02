@@ -3,3 +3,7 @@
 node_modules/
 web/dist/
 *.swp
+
+# Trailer: kept local only
+docs/trailer*
+web/scripts/trailer/

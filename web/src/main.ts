@@ -817,7 +817,6 @@ function renderTown() {
       <span class="head-btns"><button class="icon-btn res-toggle" data-act="residents" data-tip="Show or hide the residents">${ICON.avatar(groupColor(0), AVATAR_FUR[0])}</button><button class="icon-btn" data-act="new" data-tip="A new random town, same size">${ICON.dice()}</button>
       <button class="icon-btn" data-act="title" data-tip="Back to the title screen">${ICON.home()}</button></span></div>
     <div class="diff-row">${chips}</div>
-    <p class="goal">Make your cats happy and your town productive, within budget.</p>
     ${rows}
     <div class="town-foot">${st.revealed ? `<span class="revealed-note">You've seen the best plan for this town.</span>` : `<button class="linkish" data-act="reveal">View solution</button>`}</div>`);
 }
