@@ -16,6 +16,7 @@ import { renderThumbs } from "./thumbs";
 import type { Building, CatDay, EvalReply, Kind, Personality, PuzzleReply, Resident, Solution, Trip } from "./types";
 import backdropFixture from "../fixtures/puzzle.json";
 import { Transit } from "./transit";
+import { Music, musicPill } from "./music";
 import type { Link } from "./overlays";
 import { World, type Feeling, type Target } from "./world";
 import type { CrimeSpot, Cue, IdleMode } from "./transit";
@@ -1714,4 +1715,7 @@ if (new URLSearchParams(location.search).has("test")) {
     blocks: () => st.build.map((_b, i) => ({ i, fixed: !!st.pr?.puzzle.fixed[i], kind: st.build[i].kind, p: world.screenOf({ kind: "block", i }) })),
   };
 }
+// cozy lo-fi music (starts with the first click; the pill remembers on/off and volume)
+const music = new Music();
+musicPill($("hud"), music);
 void boot();

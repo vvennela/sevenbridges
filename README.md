@@ -19,23 +19,29 @@ proves which plan is best before the level starts.
 
 ## Play
 
-```sh
-lake build                                   # the Lean backend
-cd server && npm install && node bridge.mjs  # the bridge, port 8787
-cd web && npm install && npx vite            # the game, http://localhost:5173
-```
+Play online: **https://vvennela.github.io/sevenbridges/**
+
+The Lean backend runs in your browser as WebAssembly. No server is needed.
 
 Press **Start** and pick Easy (5 blocks), Medium (7) or Hard (8). Pick a building
 in the tray. Left-click a block to build or to add a floor. Right-click to take a
 floor away. Press **Build** to get your rating. Press **View solution** to see the
-best plan. The town then locks, and you go to the next town.
+best plan. The town then locks, and you go to the next town. The music player is
+in the corner.
+
+Run it locally:
+
+```sh
+cd web && npm install && npx vite            # http://localhost:5173
+```
 
 ## The stack
 
 | Part | What it does |
 |---|---|
 | **Lean 4.35** (`SevenBridges/`) | The rules, the cat simulation, the scoring, the solver, the level generator and every proof. It compiles to the backend program. |
-| **Bridge** (`server/bridge.mjs`, Node) | Passes messages between the browser and the Lean program. Keeps towns ready ahead of time, each in its own Lean process, so a new town opens at once. |
+| **Browser engine** (`Wasm.lean`, `wasm/`) | The same Lean backend, compiled to WebAssembly with Emscripten. It runs in a Web Worker. A second worker prepares the next town while you play. |
+| **Bridge** (`server/bridge.mjs`, Node, optional) | Runs the native Lean program behind a WebSocket. Use it with `?server`. |
 | **Game** (`web/`, TypeScript and three.js) | Draws the town and the cats. Sends your plan to Lean and shows what Lean returns. It does not compute any score. |
 
 ## Why Lean
@@ -250,6 +256,8 @@ The output is also tested:
 |---|---|
 | The browser's random seed | Trusted |
 | The Lean compiler, which turns the proven code into the backend | Trusted |
+| Emscripten, which turns that code into WebAssembly | Trusted. `node wasm/compare.mjs` checks that the browser engine and the native program give the same replies: 26 of 26 matched byte for byte. |
+| Starter-pack towns (`web/public/pack/`) | The native program made and solved them. The browser checks that each stored best plan is valid and has the recorded score before it uses the town. |
 | The rules mean what we want | Reviewed by people. The rules are short Lean definitions with comments. |
 | The drawing and the animation in the browser | Tested with screenshots and scripts |
 | The set of levels | Random among the towns that pass the generator's quality checks. The generator drops levels where random play scores well or where the best plan has no homes. |

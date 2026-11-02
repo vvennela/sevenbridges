@@ -373,3 +373,17 @@ body[data-lens="air"] .postcard { top: calc(var(--pc-top, 356px) + 46px); }
 .btn.next { flex: 1; background: radial-gradient(circle at 35% 30%, #FFE08A, var(--sun) 60%); box-shadow: 0 3px 0 var(--sun-deep); color: var(--ink); font-size: 16px; }
 .build.next { font-size: 17px; line-height: 1.05; }
 .tray.locked .tile { opacity: 0.45; }
+
+/* music pill (bottom left) */
+.music { position: absolute; left: 18px; bottom: 18px; display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 12px; border-radius: 16px; background: var(--panel); border: 2px solid #fff; box-shadow: var(--shadow); max-width: 300px; z-index: 5; }
+.mu-note { font-family: "Fredoka", sans-serif; font-size: 17px; color: var(--ink-faint); transition: color 0.3s; }
+.music.on .mu-note { color: var(--coral); animation: mu-bob 1.6s ease-in-out infinite; }
+@keyframes mu-bob { 50% { transform: translateY(-2px) rotate(-8deg); } }
+.mu-name { font-weight: 700; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 118px; }
+.mu-btn { width: 28px; height: 28px; border: none; border-radius: 9px; background: #F3F1F9; display: grid; place-items: center; padding: 0; color: var(--ink); }
+.mu-btn:hover { background: #E9E6F1; }
+.mu-btn svg { width: 16px; height: 16px; }
+.mu-vol { width: 64px; accent-color: var(--coral); }
+@media (max-width: 1340px) { .mu-vol { width: 48px; } .mu-name { width: 96px; } }
+/* narrower screens: the tray reaches the left edge, so the pill sits just above it */
+@media (max-width: 1560px) { .music { bottom: 124px; } }
