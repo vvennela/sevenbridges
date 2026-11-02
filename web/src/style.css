@@ -482,3 +482,12 @@ body[data-lens="air"] .postcard { top: calc(var(--pc-top, 356px) + 40px); max-he
 
 /* the level card and dialogs sit above the HUD (the tray never covers their buttons) */
 .intro { z-index: 30; overflow-y: auto; }
+
+/* Narrower screens: the Edit button says it already, so drop the tray hint;
+   and keep the tray centred, with the result card above it instead of beside it.
+   (Phones and short windows have their own layout above.) */
+@media (min-width: 901px) and (max-width: 1500px) and (min-height: 561px) {
+  .tray[data-hint]:not([data-hint=""])::before { display: none; }
+  body.pc-open .tray { transform: translateX(-50%); }
+  body.pc-open .postcard { top: var(--pc-top, 356px); bottom: calc(var(--tray-h, 110px) + 24px); max-height: none; overflow: auto; }
+}
