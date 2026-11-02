@@ -814,7 +814,7 @@ function renderTown() {
     "",
   ].join("");
   setHTML("town", `<div class="town-head"><h1>${esc(level ? `Town #${level.seed}` : pz.name)}</h1>
-      <span class="head-btns"><button class="icon-btn" data-act="new" data-tip="A new random town, same size">${ICON.dice()}</button>
+      <span class="head-btns"><button class="icon-btn res-toggle" data-act="residents" data-tip="Show or hide the residents">${ICON.avatar(groupColor(0), AVATAR_FUR[0])}</button><button class="icon-btn" data-act="new" data-tip="A new random town, same size">${ICON.dice()}</button>
       <button class="icon-btn" data-act="title" data-tip="Back to the title screen">${ICON.home()}</button></span></div>
     <div class="diff-row">${chips}</div>
     <p class="goal">Make your cats happy and your town productive, within budget.</p>
@@ -1337,7 +1337,7 @@ function placeCard() {
   const below = links.length > 0 && cardTarget.kind === "block";
   const farRight = fit(p.x + 200, p.y - h / 2), farLeft = fit(p.x - w - 200, p.y - h / 2), high = fit(p.x - w / 2, p.y - h - 160);
   const order = below ? [under, right, left, above, farRight, farLeft, high] : [above, under, right, left, farRight, farLeft, high];
-  const panels = ["town", "meter", "postcard", "lenses", "viewpad"].map((id) => $(id)).filter((e) => !e.classList.contains("hidden") && e.offsetWidth).map((e) => e.getBoundingClientRect());
+  const panels = ["town", "meter", "postcard", "lenses", "viewpad", "music"].map((id) => $(id)).filter((e) => !e.classList.contains("hidden") && e.offsetWidth).map((e) => e.getBoundingClientRect());
   // neighbor arc labels must stay visible too
   const labels = links.map((l) => world.linkLabelAt(l.from, l.to, l.tone === "work" ? 0.28 : 0.5)).filter((q): q is { x: number; y: number } => !!q);
   const hits = (c: { x: number; y: number }) =>
@@ -1562,13 +1562,27 @@ world.onDouble = (t) => {
   if (t?.kind !== "block") { world.recenter(); return; }
   if (!canEdit() || st.pr!.puzzle.fixed[t.i]) world.focusSmooth(t.i);
 };
-let lastMeterH = 0;
+/**
+ * Stack the right column (meter, lenses, turn pad, legend) from their real heights, and keep the
+ * music pill and bottom sheets clear of the tray, whatever the window size.
+ */
+let lastLayout = "";
 function layoutRight() {
-  const h = $("meter").offsetHeight;
-  if (h === lastMeterH) return;
-  lastMeterH = h;
-  document.documentElement.style.setProperty("--lens-top", `${18 + h + 8}px`);
-  document.documentElement.style.setProperty("--pc-top", `${18 + h + 8 + 52 + 50}px`);
+  const m = $("meter"), lensEl = $("lenses"), vp = $("viewpad"), tray = $("tray"), mu = document.getElementById("music");
+  const top = m.offsetTop, mh = m.offsetHeight, lh = lensEl.offsetHeight, vh = vp.offsetHeight;
+  const tr = tray.getBoundingClientRect(), shown = tr.height > 0;
+  const trayH = shown ? Math.max(0, window.innerHeight - tr.top) + 8 : 0;
+  const key = `${top},${mh},${lh},${vh},${Math.round(trayH)},${Math.round(tr.left)},${window.innerWidth}`;
+  if (key === lastLayout) return;
+  lastLayout = key;
+  const gap = 8, css = document.documentElement.style;
+  css.setProperty("--lens-top", `${top + mh + gap}px`);
+  css.setProperty("--vp-top", `${top + mh + gap + lh + gap}px`);
+  css.setProperty("--legend-top", `${top + mh + gap + lh + gap + vh + gap}px`);
+  css.setProperty("--pc-top", `${top + mh + gap + lh + gap + vh + gap}px`);
+  css.setProperty("--tray-h", `${Math.round(trayH)}px`);
+  // the music pill sits beside the tray when there is room, else just above it
+  if (mu) { const room = !shown || tr.left - 8 - 18 >= mu.offsetWidth; mu.style.bottom = room && !document.body.classList.contains("pc-open") ? "" : `${Math.round(trayH)}px`; }
 }
 world.onFrame = () => { layoutRight(); placeCard(); placeBadges(); placeLinks(); tickClock(); };
 window.addEventListener("pointermove", (e) => { mouse = { x: e.clientX, y: e.clientY }; });
@@ -1595,6 +1609,7 @@ document.addEventListener("click", (e) => {
   else switch (t.dataset.act) {
     case "keep": if (!st.revealed) keepBuilding(); break;
     case "reveal": askReveal(); break;
+    case "residents": document.body.classList.toggle("residents-open"); break;
     case "reveal-yes": void reveal(); break;
     case "reveal-no": $("confirm").classList.add("hidden"); break;
     case "next": nextTown(); break;
