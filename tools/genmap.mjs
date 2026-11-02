@@ -456,7 +456,7 @@ export function toward(m, x, y) {
     (p.x * x + p.y * y > m.points[best].x * x + m.points[best].y * y ? i : best), 0);
 }
 
-if (process.argv[1] && process.argv[1].endsWith("genmap.mjs")) {
+if (typeof process !== "undefined" && process.argv?.[1]?.endsWith("genmap.mjs")) {
   const seed = Number(process.argv[2] ?? 7), n = Number(process.argv[3] ?? 7);
   const m = generateMap(seed, n);
   if (process.argv[4] === "--design") console.error(JSON.stringify(m.design));

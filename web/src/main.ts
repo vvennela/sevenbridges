@@ -9,6 +9,7 @@ import "@fontsource/nunito/600.css";
 import "@fontsource/nunito/700.css";
 import "./style.css";
 import { Engine, engineUrl } from "./api";
+import { WasmEngine } from "./engine-wasm";
 import { FACTOR_ICON, ICON } from "./icons";
 import { AVATAR_FUR, C, FACTOR, KIND_NAME, ROUTE_COLORS, SUBWAY_COLOR, groupColor, say } from "./palette";
 import { renderThumbs } from "./thumbs";
@@ -46,7 +47,8 @@ const st: State = {
 };
 
 const world = new World($("scene"));
-const engine = new Engine(engineUrl());
+// The Lean engine runs in the browser (WebAssembly); `?server` uses the WebSocket bridge instead.
+const engine: Engine | WasmEngine = new URLSearchParams(location.search).has("server") ? new Engine(engineUrl()) : new WasmEngine();
 /** `?test`: the last solution sent to the engine, and its reply. */
 let lastSent: { solution: Solution; reply: EvalReply | null } | null = null;
 {
