@@ -157,14 +157,21 @@ body.built .tray-gap { opacity: 0.5; }
 .banner-text b { font-family: "Fredoka", sans-serif; font-weight: 600; font-size: 16px; }
 .banner-text span { color: var(--ink-soft); font-size: 12.5px; }
 
-/* ---------- coach marks, tooltips, toast, loading ---------- */
-.coach { position: absolute; background: var(--ink); color: #fff; font-weight: 700; font-size: 14px; padding: 10px 14px; border-radius: 14px; box-shadow: var(--shadow); pointer-events: none; animation: bob 1.6s ease-in-out infinite; white-space: nowrap; }
-.coach::after { content: ""; position: absolute; left: 50%; bottom: -7px; margin-left: -8px; border: 8px solid transparent; border-bottom: 0; border-top-color: var(--ink); }
-.coach-n { opacity: 0.6; margin-right: 8px; font-size: 12px; }
-.coach.step0 { bottom: 134px; left: calc(50% - 250px); }
-.coach.step1 { top: 42%; left: 50%; transform: translateX(-50%); }
-.coach.step1::after { display: none; }
-.coach.step2 { bottom: 134px; left: calc(50% + 150px); }
+/* ---------- tooltips, toast, loading ---------- */
+/* the first-time tutorial */
+.tut { position: fixed; left: 0; top: 0; z-index: 40; width: min(300px, calc(100vw - 16px)); background: var(--ink); color: #fff; border-radius: 18px; padding: 12px 16px 14px; box-shadow: var(--shadow); pointer-events: auto; transition: transform 0.25s ease; }
+.tut.pop { animation: tut-pop 0.3s ease-out; }
+.tut-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; opacity: 0.85; }
+.tut-top .linkish { color: #fff; opacity: 0.8; font-size: 12px; padding: 0; }
+.tut h3 { font-family: "Fredoka", sans-serif; font-weight: 600; font-size: 18px; margin: 6px 0 4px; color: var(--sun); }
+.tut p { margin: 0; font-size: 14px; line-height: 1.45; }
+.tut-btns { display: flex; justify-content: flex-end; margin-top: 10px; }
+.tut .btn.primary { margin: 0; background: var(--sun); color: var(--ink); box-shadow: 0 3px 0 var(--sun-deep); }
+.tut .btn.primary:hover { background: #FFD465; }
+.tut-focus { outline: 3px solid var(--sun) !important; outline-offset: 3px; animation: tut-glow 1.4s ease-in-out infinite; }
+@keyframes tut-pop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tut-glow { 50% { outline-color: rgba(255, 200, 61, 0.35); } }
+.intro-lead { margin: 6px 0 10px; color: var(--ink-soft); font-size: 14px; }
 @keyframes bob { 50% { margin-top: -4px; margin-bottom: 4px; } }
 .tip { position: fixed; z-index: 50; max-width: 260px; background: var(--ink); color: #fff; font-size: 12.5px; font-weight: 600; line-height: 1.35; padding: 7px 10px; border-radius: 10px; pointer-events: none; }
 .toast { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; font-weight: 700; padding: 9px 16px; border-radius: 14px; box-shadow: var(--shadow); pointer-events: none; }
@@ -181,7 +188,7 @@ body.built .tray-gap { opacity: 0.5; }
   .tile.small { width: 70px; }
   .build { width: 84px; height: 84px; }
 }
-#hud > .loading.gone, #hud > .coach, #hud > .toast { pointer-events: none; }
+#hud > .loading.gone, #hud > .toast { pointer-events: none; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-left: 7px; vertical-align: 1px; box-shadow: 0 0 0 1.5px #fff, 0 0 0 2.5px rgba(46,58,89,.12); }
 .avatar svg { height: 38px; }
 
@@ -244,7 +251,7 @@ body.built .tray-gap { opacity: 0.5; }
 
 /* ---------- title screen ---------- */
 body.titling #town, body.titling #meter, body.titling #lenses, body.titling #tray, body.titling #badges, body.titling #links,
-body.titling #card, body.titling #coach, body.titling #postcard, body.titling #intro, body.titling #dayclock { display: none !important; }
+body.titling #card, body.titling #tut, body.titling #postcard, body.titling #intro, body.titling #dayclock { display: none !important; }
 .title { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
   background: radial-gradient(ellipse at 50% 46%, rgba(255,255,255,0.0) 30%, rgba(230,243,245,0.55) 100%); }
 .title-card[data-screen="home"] { background: radial-gradient(ellipse at 50% 55%, rgba(255,255,255,0.75), rgba(255,255,255,0.35) 45%, rgba(255,255,255,0) 70%); padding: 40px 90px 50px; }
@@ -448,8 +455,6 @@ body[data-lens="air"] .postcard { top: calc(var(--pc-top, 356px) + 40px); max-he
   .music { left: 8px; width: auto; grid-template-columns: 22px 30px 30px; padding: 0 6px 0 8px; height: 40px; }
   .mu-name, .mu-vol { display: none; }
   body.pc-open .music { display: none; }
-  .coach.step0, .coach.step2 { bottom: 110px; left: 50%; transform: translateX(-50%); }
-  .coach { font-size: 12.5px; padding: 8px 12px; }
   .intro-card { padding: 16px 18px; } .intro-card h2 { font-size: 28px; }
   .sizes-big { flex-wrap: wrap; justify-content: center; gap: 8px; }
   .size-card { width: 104px; padding: 10px 6px; }

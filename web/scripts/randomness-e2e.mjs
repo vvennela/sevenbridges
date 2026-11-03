@@ -9,6 +9,7 @@ const url = process.argv[3] ?? "http://localhost:5173/";
 const sizes = ["easy", "medium", "hard"];
 const browser = await chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+await page.addInitScript(() => localStorage.setItem("sb-tutorial-done", "1")); // straight to the size picker
 
 const seen = [];
 for (let i = 0; i < runs; i++) {

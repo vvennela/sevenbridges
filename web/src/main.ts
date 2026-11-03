@@ -13,12 +13,13 @@ import { WasmEngine } from "./engine-wasm";
 import { FACTOR_ICON, ICON } from "./icons";
 import { AVATAR_FUR, C, FACTOR, KIND_NAME, ROUTE_COLORS, SUBWAY_COLOR, groupColor, say } from "./palette";
 import { renderThumbs } from "./thumbs";
-import type { Building, CatDay, EvalReply, Kind, Personality, PuzzleReply, Resident, Solution, Trip } from "./types";
+import type { Building, CatDay, EvalReply, GenerateReply, Kind, Personality, PuzzleReply, Resident, Solution, Trip } from "./types";
 import backdropFixture from "../fixtures/puzzle.json";
 import { Transit } from "./transit";
 import { Music, musicPill } from "./music";
 import type { Link } from "./overlays";
 import { World, type Feeling, type Target } from "./world";
+import { Tutorial, type TutorialState } from "./tutorial";
 import type { CrimeSpot, Cue, IdleMode } from "./transit";
 import type { V2 } from "./geom";
 
@@ -269,15 +270,52 @@ async function newTown(seed: number, size: Size, fresh = false): Promise<{ pr: P
   // Each request already tries up to 3 maps, so 2 requests (6 maps) is plenty and caps the wait.
   for (let s2 = seed, tries = 0; tries < 2; s2 = fresh ? randomSeed() : s2 + 1, tries++) {
     if (tries > 0) { const w = document.getElementById("wait-text"); if (w) w.textContent = "Still building your town…"; }
-    const g = await engine.newPuzzle(s2, size, !fresh);
-    if (g.generated && g.puzzle) {
-      const pz = g.puzzle.puzzle;
-      const v = g.verified;
-      const proof = typeof v === "object" && v !== null ? v : null;
-      return { pr: g.puzzle, info: { seed: g.seed ?? s2, size, simSeed: g.simSeed ?? proof?.simSeed ?? pz.simSeed, verified: !!(proof ?? v ?? pz.verified), randomMedian: g.info.randomPlay?.median } };
-    }
+    const t = levelOf(await engine.newPuzzle(s2, size, !fresh), s2, size);
+    if (t) return t;
   }
   throw new Error("Couldn't plan a town this time");
+}
+
+/** The town and its level facts from a `newPuzzle` reply (null if no town was made). */
+function levelOf(g: GenerateReply, seed: number, size: Size): { pr: PuzzleReply; info: LevelInfo } | null {
+  if (!g.generated || !g.puzzle) return null;
+  const pz = g.puzzle.puzzle;
+  const v = g.verified;
+  const proof = typeof v === "object" && v !== null ? v : null;
+  return { pr: g.puzzle, info: { seed: g.seed ?? seed, size, simSeed: g.simSeed ?? proof?.simSeed ?? pz.simSeed, verified: !!(proof ?? v ?? pz.verified), randomMedian: g.info.randomPlay?.median } };
+}
+
+// ---------- the tutorial ----------
+
+/** The tutorial town: a small starter-pack town (the Elderly love parks, Professionals don't). */
+const TUTORIAL_SEED = 966784019;
+const tut = new Tutorial($("hud"));
+/** The level now open is the tutorial town. */
+let inTutorial = false;
+tut.onEnd = () => { inTutorial = false; };
+
+async function playTutorial() {
+  showScreen("wait");
+  $("wait-text").textContent = "Building your first town…";
+  try {
+    const g = engine instanceof WasmEngine ? await engine.packTown("easy", TUTORIAL_SEED) : await engine.newPuzzle(TUTORIAL_SEED, "easy", true);
+    const t = levelOf(g, TUTORIAL_SEED, "easy");
+    if (!t) throw new Error("Couldn't open the tutorial town");
+    inTutorial = true;
+    enterLevel(t.pr, t.info);
+  } catch {
+    // never block play on the tutorial: go to a normal town instead
+    inTutorial = false;
+    void playNew("easy");
+  }
+}
+
+function tutorialState(): TutorialState {
+  return {
+    tool: st.tool, edits, built: st.build.filter((b) => b.kind !== "empty").length, blocks: st.build.length,
+    lens, routesOn: st.routesOn.filter(Boolean).length, station: st.station !== null,
+    mode: st.mode, rated: !!st.built?.rating,
+  };
 }
 
 /** Seeds already played on this device, so a new game never repeats a town. */
@@ -350,6 +388,7 @@ function startTitle() {
 
 /** Start → pick a size → Lean makes the town and proves its best plan → play. */
 async function playNew(size: Size) {
+  if (tut.active) tut.end();
   showScreen("wait");
   $("wait-text").textContent = "Building your town…";
   try {
@@ -394,7 +433,7 @@ function enterLevel(pr: PuzzleReply, info: LevelInfo | null) {
   renderViewPad();
   render();
   // a town whose best plan was already shown stays locked (and shows it again)
-  if (level && revealedTowns().has(level.seed)) { $("loading").classList.add("gone"); void reveal(); return; }
+  if (level && !inTutorial && revealedTowns().has(level.seed)) { $("loading").classList.add("gone"); void reveal(); return; }
   showIntro();
   $("loading").classList.add("gone");
   void refreshLive();
@@ -408,18 +447,19 @@ function showIntro() {
     level ? `Town #${level.seed}` : pz.name,
     level?.simSeed !== undefined ? `simulation #${level.simSeed}` : null,
   ].filter(Boolean).join(" · ");
-  const sizeName = level ? `${level.size[0].toUpperCase()}${level.size.slice(1)} town, ${pz.map.blocks.length} blocks` : `${pz.map.blocks.length} blocks`;
+  const sizeName = inTutorial ? "Your first town" : level ? `${level.size[0].toUpperCase()}${level.size.slice(1)} town, ${pz.map.blocks.length} blocks` : `${pz.map.blocks.length} blocks`;
   const who = pz.groups.map((g, i) => `<span class="intro-who">${ICON.avatar(groupColor(i), AVATAR_FUR[i % AVATAR_FUR.length], i % 2 ? "scarf" : "tie")}${esc(g.name)} <small>${g.share}%</small></span>`).join("");
   setHTML("intro", `<div class="intro-card">
     <div class="intro-kicker">${esc(sizeName)}</div>
     <h2>${esc(level ? `Town #${level.seed}` : pz.name)}</h2>
     ${level?.simSeed !== undefined || level?.verified ? `<div class="intro-meta">${esc(meta)}</div>` : ""}
 
+    ${inTutorial ? `<p class="intro-lead">A quick guided town to learn the ropes. It takes about a minute.</p>` : ""}
     <div class="intro-whos">${who}</div>
-    <button class="tbtn primary" data-act="go">Let's build</button></div>`);
+    <button class="tbtn primary" data-act="go">${inTutorial ? "Show me" : "Let's build"}</button></div>`);
   $("intro").classList.remove("hidden");
 }
-function hideIntro() { $("intro").classList.add("hidden"); coach(); }
+function hideIntro() { $("intro").classList.add("hidden"); if (inTutorial && !tut.active) tut.begin(tutorialState()); coach(); }
 
 async function boot() {
   try {
@@ -644,7 +684,8 @@ async function reveal() {
   $("confirm").classList.add("hidden");
   if (!st.pr) return;
   st.revealed = true;
-  if (level) markRevealed(level.seed);
+  if (tut.active) tut.end();
+  if (level && !inTutorial) markRevealed(level.seed);
   st.tool = null;
   st.mode = "built";
   st.built = null;
@@ -749,7 +790,6 @@ async function build() {
   st.mode = "built";
   st.tool = null;
   st.postcardOpen = true;
-  localStorage.setItem("sb-coach", "3");
   hideCard();
   world.setBuild(st.build, st.station, true);
   render();
@@ -790,6 +830,7 @@ function render() {
   world.setBridgeTool(canEdit() && st.tool === "bridge");
   updateLens();
   if (cardTarget) renderCard(cardTarget);
+  coach();
 }
 
 /** Top-left: the neighborhood and its residents (what they love and dislike). */
@@ -1504,18 +1545,8 @@ void Transit;
 
 // ---------- coach marks, tooltip, toast ----------
 
-function coach() {
-  const el = $("coach");
-  const done = Number(localStorage.getItem("sb-coach") ?? "0");
-  let step = done;
-  if (step === 0 && st.tool) step = 1;
-  if (step <= 1 && edits > 0) step = 2;
-  if (step !== done) localStorage.setItem("sb-coach", String(step));
-  const msgs = ["Pick a building", "Click a block to build. Right-click lowers.", "Press Build to see how residents feel"];
-  if (step >= 3 || !canEdit() || new URLSearchParams(location.search).has("nocoach")) { el.classList.add("hidden"); return; }
-  el.className = `coach step${step}`;
-  el.innerHTML = `<span class="coach-n">${step + 1}/3</span>${msgs[step]}`;
-}
+/** Tell the tutorial what changed (it moves on when its step is done). */
+function coach() { tut.update(tutorialState()); }
 
 let tipEl: HTMLDivElement | null = null;
 document.addEventListener("mouseover", (e) => {
@@ -1583,7 +1614,7 @@ function layoutRight() {
   // the music pill sits beside the tray when there is room, else just above it
   if (mu) { const room = !shown || tr.left - 8 - 18 >= mu.offsetWidth; mu.style.bottom = room && !document.body.classList.contains("pc-open") ? "" : `${Math.round(trayH)}px`; }
 }
-world.onFrame = () => { layoutRight(); placeCard(); placeBadges(); placeLinks(); tickClock(); };
+world.onFrame = () => { layoutRight(); tut.place(); placeCard(); placeBadges(); placeLinks(); tickClock(); };
 window.addEventListener("pointermove", (e) => { mouse = { x: e.clientX, y: e.clientY }; });
 $("card").addEventListener("pointerenter", () => clearTimeout(hideTimer));
 $("card").addEventListener("pointerleave", () => { hideTimer = window.setTimeout(hideCard, 200); });
@@ -1594,7 +1625,8 @@ document.addEventListener("click", (e) => {
   if (t.dataset.pick) { void playNew(t.dataset.pick as Size); return; }
   if (t.dataset.view) return; // handled on pointerdown (with repeat)
   switch (t.dataset.act) {
-    case "start": showScreen("size"); return;
+    case "start": if (Tutorial.wanted()) void playTutorial(); else showScreen("size"); return;
+    case "tutorial": void playTutorial(); return;
     case "rules": showScreen("rules"); return;
     case "home": showScreen("home"); return;
     case "go": hideIntro(); return;
@@ -1602,7 +1634,7 @@ document.addEventListener("click", (e) => {
     case "new": void playNew(pickSize); return;
   }
   if (t.dataset.size) { pickSize = t.dataset.size as Size; lastHTML.delete("town"); renderTown(); return; }
-  if (t.dataset.lens) { lens = t.dataset.lens as Lens; updateLens(); if (cardTarget) renderCard(cardTarget); }
+  if (t.dataset.lens) { lens = t.dataset.lens as Lens; updateLens(); coach(); if (cardTarget) renderCard(cardTarget); }
   else if (t.dataset.tool) pickTool(t.dataset.tool as Tool);
   else if (t.dataset.route) toggleRoute(Number(t.dataset.route));
   else switch (t.dataset.act) {

@@ -95,16 +95,8 @@ export class WasmEngine {
       // a pack town not played yet on this device
       const seen = played();
       const t = (await this.pack(size)).find((x) => !seen.has(x.seed));
-      if (t) {
-        const w = new LeanWorker();
-        try {
-          const l = unwrap<{ verified: GenerateReply["verified"]; puzzle: PuzzleReply }>(
-            await w.ask(JSON.stringify({ cmd: "load", puzzle: t.puzzle, best: t.best, bestScore: t.bestScore })));
-          this.swap(w);
-          return { generated: true, seed: t.seed, verified: l.verified, puzzle: l.puzzle,
-            info: { attempts: 0, work: 0, workBudget: 0, randomPlay: t.randomMedian === undefined ? undefined : { median: t.randomMedian, p95: 0, rated: 0 } } };
-        } catch { w.stop(); /* fall back to a town made here */ }
-      }
+      const fromPack = t && (await this.load(t));
+      if (fromPack) return fromPack;
       // the town made in the background
       const r = this.ready[size]!;
       delete this.ready[size];
@@ -114,6 +106,31 @@ export class WasmEngine {
       if (g.generated) this.swap(r.w); else r.w.stop();
       return g;
     });
+  }
+
+  /** One starter-pack town by its seed (the tutorial town), played before or not. */
+  packTown(size: Size, seed: number): Promise<GenerateReply> {
+    return this.serial(async () => {
+      const t = (await this.pack(size)).find((x) => x.seed === seed);
+      const g = t && (await this.load(t));
+      if (g) return g;
+      const w = new LeanWorker();
+      const r = unwrap<GenerateReply>(await w.make(seed >>> 0, SIZES[size]));
+      if (r.generated) this.swap(w); else w.stop();
+      return r;
+    });
+  }
+
+  /** Open a pack town with Lean's `load`, which checks its stored best plan first. */
+  private async load(t: PackTown): Promise<GenerateReply | null> {
+    const w = new LeanWorker();
+    try {
+      const l = unwrap<{ verified: GenerateReply["verified"]; puzzle: PuzzleReply }>(
+        await w.ask(JSON.stringify({ cmd: "load", puzzle: t.puzzle, best: t.best, bestScore: t.bestScore })));
+      this.swap(w);
+      return { generated: true, seed: t.seed, verified: l.verified, puzzle: l.puzzle,
+        info: { attempts: 0, work: 0, workBudget: 0, randomPlay: t.randomMedian === undefined ? undefined : { median: t.randomMedian, p95: 0, rated: 0 } } };
+    } catch { w.stop(); return null; /* fall back to a town made here */ }
   }
 
   private swap(w: LeanWorker) { this.current.stop(); this.current = w; }
