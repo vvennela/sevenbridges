@@ -184,12 +184,11 @@ def Size.metroLength : Size → Nat
   | .medium => 2
   | .hard => 2
 
-/-- How many office heights a level offers: one of 1–2 floors, and the rest
-at random from 1–5. -/
-def Size.officeHeights : Size → Nat
-  | .easy => 3
-  | .medium => 1
-  | .hard => 1
+/-- Office heights a level offers. Every size offers 1–3 floors; small towns
+also offer towers of 4 and 5 floors. -/
+def Size.offices : Size → List Building
+  | .easy => [.office .one, .office .two, .office .three, .office .four, .office .five]
+  | _ => [.office .one, .office .two, .office .three]
 
 /-- How many of food, shop, bar and park a level leaves out. -/
 def Size.dropExtras : Size → Nat
@@ -197,13 +196,9 @@ def Size.dropExtras : Size → Nat
   | .medium => 1
   | .hard => 3
 
-/-- Home heights a level of this size offers. -/
+/-- Home heights: 1–3 floors on every size. -/
 def Size.homes : Size → List Building
-  | .hard => [.housing .one, .housing .two]
   | _ => [.housing .one, .housing .two, .housing .three]
-
-def allOfficeHeights : List Building :=
-  [.office .one, .office .two, .office .three, .office .four, .office .five]
 
 /-- The river segments of a map, by number. -/
 def riverSegments (m : RoadMap) : List Nat :=
@@ -220,15 +215,11 @@ already built. -/
 def randomPuzzle (r : Rng) (m : RoadMap) (routes : List Route) (name : String) :
     Puzzle × Rng :=
   let sz := Size.ofBlocks m.blockCount
-  -- Office heights: always a low one (1 or 2 floors), then others at random.
-  let (low, r) := r.pick [Building.office .one, Building.office .two]
-  let (more, r) := r.choose (allOfficeHeights.filter (· != low)) (sz.officeHeights - 1)
-  let offices := low :: more
+  -- Homes, offices and shops come in every height their size offers.
   let extras : List (List Building) :=
-    [[.food], if sz = .hard then [.shop .one] else [.shop .one, .shop .two], [.bar], [.park]]
+    [[.food], [.shop .one, .shop .two, .shop .three], [.bar], [.park]]
   let (kept, r) := r.choose extras (4 - sz.dropExtras)
-  let offices := offices.mergeSort fun a b => a.stories ≤ b.stories
-  let allowed := sz.homes ++ offices ++ kept.flatten
+  let allowed := sz.homes ++ sz.offices ++ kept.flatten
   let (count, r) := r.below 2
   let (groups, r) := randomGroups r (count + 2)
   let (bridgeSites, r) := chooseBridgeSites r m routes sz.bridgeSites
@@ -324,9 +315,9 @@ def Verdict.accepted (v : Verdict) : Bool :=
 /-! ## The generator, with a step budget -/
 
 /-- Most steps one attempt may take. -/
-def attemptFuel : Nat := 450000
+def attemptFuel : Nat := 1000000
 /-- Most steps the whole generator may take. -/
-def generatorStepBudget : Nat := 1500000
+def generatorStepBudget : Nat := 2500000
 /-- Most attempts. -/
 def maxAttempts : Nat := 40
 /-- Work counted for checking one level besides the search: each random

@@ -396,13 +396,21 @@ best plan of every level it returns.
    `generatorStepBudget` steps are used. The bridge then tries up to two new
    maps (seed + 7919, + 2·7919).
 
-**Sizes.** Less choice on bigger maps, so the proven solver finishes in time:
+**Sizes.** Homes, offices and shops come in every height of their size, so
+height is always the player's choice. Bigger maps leave out more of food,
+shop, bar and park, so the proven solver finishes in time:
 
-| Size | Blocks | Homes | Offices | Food, shop, bar, park | Shops | Metro blocks | Bridge sites |
-|---|---|---|---|---|---|---|---|
-| easy | 5 | 1–3 floors | 1 or 2 floors, plus 2 other heights of 1–5 | all 4 | 1–2 floors | 2 | up to 2 |
-| medium | 7 | 1–3 | 1 or 2 floors | 3 of 4 | 1–2 | 2 | 1 |
-| hard | 8 | 1–2 | 1 or 2 floors | 1 of 4 | 1 | 2 | 1 |
+| Size | Blocks | Homes | Offices | Shops | Food, shop, bar, park | Metro blocks |
+|---|---|---|---|---|---|---|
+| easy | 5 | 1–3 floors | 1–5 floors | 1–3 floors | all 4 | 2 |
+| medium | 7 | 1–3 | 1–3 | 1–3 | 3 of 4 | 2 |
+| hard | 8 | 1–3 | 1–3 | 1–3 | 1 of 4 | 2 |
+
+Every river crossing is a possible bridge site. One attempt may take 1,000,000
+search steps and the generator 2,500,000 in all (`attemptFuel`,
+`generatorStepBudget`). With 1–5 floor offices on medium and hard, a third of
+hard maps ran out of steps and the slowest took about a minute, so towers stay
+on easy towns.
 
 Hard levels are 8 blocks, not 9: with 9 open blocks the proof took 2–10
 million steps (10–40 s).
@@ -417,7 +425,7 @@ measured.
 |---|---|
 | `solveWithFuel_steps_le` | the fast solver takes at most `fuel` steps (`searchFuel` = 12,000,000 for `solve`) |
 | `solveWork_le` | plain search scores at most `stepLimit` layouts |
-| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (1,500,000) steps in total, at most `attemptFuel` (450,000) of search per attempt |
+| `Generator.generate_work_le` | the generator takes at most `generatorStepBudget` (2,500,000) steps in total, at most `attemptFuel` (1,000,000) of search per attempt |
 
 Measured on this machine (12 cores), `node tools/timegen.mjs <binary>
 [blocks:seed …]`, one Lean call per map, seeds 31–36 and 41–43:

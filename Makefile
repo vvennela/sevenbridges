@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 LAKE := $(HOME)/.elan/bin/lake
 
-.PHONY: help build audit test check difftest wasm pack web dev preview e2e randomness server clean
+.PHONY: help build audit test check difftest wasm pack web dev preview e2e tutorial randomness server clean
 
 help:          ## Show this list
 	@grep -E '^[a-z0-9-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-11s %s\n", $$1, $$2}'
@@ -29,7 +29,7 @@ wasm:          ## Rebuild the browser engine (Lean -> WebAssembly; needs Docker)
 	wasm/build.sh
 
 pack: build    ## Remake the starter pack of proven towns
-	node wasm/make-pack.mjs 20 20 20
+	node wasm/make-pack.mjs 20 40 60
 
 web:           ## Static build of the game (same as the Pages deploy)
 	npm ci --prefix tools
@@ -43,6 +43,9 @@ preview: web   ## Serve the static build
 
 e2e:           ## Play every size in a browser against a running preview (make preview first)
 	cd web && node scripts/test-wasm.mjs "http://localhost:4173/sevenbridges/?test"
+
+tutorial:      ## Play the first-time tutorial in a browser against the dev server (make dev first)
+	cd web && node scripts/tutorial-e2e.mjs http://localhost:5173/
 
 randomness:    ## Check that new towns are all different (needs the bridge: make server)
 	cd tools && node randomcheck.mjs 30
