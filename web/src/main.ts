@@ -1362,6 +1362,8 @@ function renderCard(t: Target) {
   setHTML("card", html);
 }
 
+/** The spot (index into placeCard's list) the card last used, for its target. */
+let cardSpot: { key: string; k: number } | null = null;
 function placeCard() {
   if (!cardTarget) return;
   const el = $("card");
@@ -1384,7 +1386,12 @@ function placeCard() {
     panels.some((r) => c.x < r.right && c.x + w > r.left && c.y < r.bottom && c.y + h > r.top) ||
     labels.some((q) => q.x > c.x - 40 && q.x < c.x + w + 40 && q.y > c.y - 20 && q.y < c.y + h + 20) ||
     (p.x > c.x - 30 && p.x < c.x + w + 30 && p.y + 20 > c.y - 30 && p.y + 20 < c.y + h + 30);
-  const { x, y } = order.find((c) => !hits(c)) ?? order[0];
+  // keep the card where it was while that spot still works, so it doesn't jump between sides
+  const key = `${cardTarget.kind}:${cardTarget.i}`;
+  const kept = cardSpot?.key === key && !hits(order[cardSpot.k]) ? cardSpot.k : -1;
+  const k = kept >= 0 ? kept : Math.max(0, order.findIndex((c) => !hits(c)));
+  cardSpot = { key, k };
+  const { x, y } = order[k];
   el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 }
 

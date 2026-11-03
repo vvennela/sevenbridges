@@ -200,6 +200,9 @@ body.built .tray-gap { opacity: 0.5; }
 .lens.on { background: var(--ink); color: #fff; }
 .badges { position: absolute; inset: 0; pointer-events: none; }
 .badges .badge { position: absolute; left: 0; top: 0; pointer-events: auto; }
+/* lens numbers sit on the blocks: let the pointer through to the block, except labels with a tooltip */
+#badges .badge { pointer-events: none; }
+#badges .badge:has([data-tip]) { pointer-events: auto; }
 .bdg { display: inline-flex; align-items: center; gap: 4px; background: #fff; border-radius: 12px; padding: 3px 8px 3px 5px; font-family: "Fredoka", sans-serif; font-weight: 600; font-size: 13px; box-shadow: 0 3px 8px rgba(46,58,89,.18); white-space: nowrap; }
 .bdg svg { width: 18px; height: 18px; }
 .bdg.route { border: 2px solid var(--c); }

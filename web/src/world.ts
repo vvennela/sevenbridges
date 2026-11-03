@@ -129,18 +129,38 @@ export class World {
       if (down && !this.cam.dragged && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6 && (e.button === 0 || e.button === 2)) this.onClick(this.pick(e), e.button, e);
       down = null;
     });
-    el.addEventListener("pointermove", (e) => {
-      if (e.buttons) return;
-      const t = this.pick(e);
-      if (!sameTarget(t, this.hovered)) { this.hovered = t; this.refreshHover(); this.onHover(t); }
-      el.style.cursor = t ? "pointer" : "grab";
-      if (e.buttons) el.style.cursor = "grabbing";
+    // Hover follows the pointer over the map and over the small labels drawn on it
+    // (mood numbers, riders, neighbor arcs), so a label never makes the card flicker.
+    // Over a HUD panel, or off the window, nothing is hovered.
+    window.addEventListener("pointermove", (e) => {
+      if (e.buttons || e.pointerType === "touch") return;
+      const over = e.target === el || !!(e.target as HTMLElement).closest?.("#badges, #links");
+      this.pointer = over ? { x: e.clientX, y: e.clientY } : null;
+      this.hoverAt(this.pointer);
     });
+    document.documentElement.addEventListener("pointerleave", () => { this.pointer = null; this.hoverAt(null); });
     el.addEventListener("dblclick", (e) => { const t = this.pick(e as unknown as PointerEvent); this.onDouble(t); });
-    el.addEventListener("pointerleave", () => { this.hovered = null; this.refreshHover(); this.onHover(null); });
   }
 
-  private pick(e: PointerEvent): Target | null {
+  /** Where the pointer is over the map (null when it is over a panel or away). */
+  private pointer: { x: number; y: number } | null = null;
+  private lastView = "";
+  private hoverAt(at: { x: number; y: number } | null) {
+    const t = at ? this.pick(at) : null;
+    if (!sameTarget(t, this.hovered)) { this.hovered = t; this.refreshHover(); this.onHover(t); }
+    this.renderer.domElement.style.cursor = t ? "pointer" : "grab";
+  }
+  /** After the camera turns, tilts or zooms, hover what is now under the still pointer. */
+  private repickIfMoved() {
+    const c = this.cam.cur;
+    const key = `${c.target.x.toFixed(2)},${c.target.z.toFixed(2)},${c.dist.toFixed(2)},${c.az.toFixed(3)},${c.polar.toFixed(3)}`;
+    if (key === this.lastView) return;
+    this.lastView = key;
+    if (this.pointer && !this.cam.dragged) this.hoverAt(this.pointer);
+  }
+
+  private pick(e: { clientX: number; clientY: number } | { x: number; y: number }): Target | null {
+    if ("x" in e) e = { clientX: e.x, clientY: e.y };
     const r = this.renderer.domElement.getBoundingClientRect();
     const p = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.ray.setFromCamera(p, this.camera);
@@ -1300,6 +1320,7 @@ export class World {
     if (this.orbit) { this.cam.goal.az += this.orbit * this.frameDt; this.cam.cur.az += this.orbit * this.frameDt; }
     this.cam.update(this.frameDt);
     this.controls.target.copy(this.cam.cur.target);
+    this.repickIfMoved();
     this.onFrame();
     this.renderer.render(this.scene, this.camera);
   }
